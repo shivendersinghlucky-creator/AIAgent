@@ -29,8 +29,11 @@ import json
 from typing import List, Dict
 import os
 
-# Initialize Groq client with API key from environment or user input
-API_KEY = os.getenv("GROQ_API_KEY", "YOUR_API_KEY_HERE")
+# Initialize Groq client with API key from environment variable
+# Set your API key: $env:GROQ_API_KEY = "your-api-key-here"
+API_KEY = os.getenv("GROQ_API_KEY")
+if not API_KEY:
+    raise ValueError("GROQ_API_KEY environment variable is not set")
 client = Groq(api_key=API_KEY)
 
 

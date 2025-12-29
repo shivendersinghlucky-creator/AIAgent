@@ -96,6 +96,8 @@ class AgentDecision:
     assumptions: List[str]
     requires_confirmation: bool  # For high-risk operations
     change_description: str  # Plain English explanation
+    formula_logic: str = ""  # Formula or logic description for the operation
+    is_read_only: bool = False  # True for display/view operations that don't modify data
     
     def to_dict(self) -> Dict:
         return {
@@ -108,7 +110,9 @@ class AgentDecision:
             "risk_level": self.risk_level,
             "assumptions": self.assumptions,
             "requires_confirmation": self.requires_confirmation,
-            "change_description": self.change_description
+            "change_description": self.change_description,
+            "formula_logic": self.formula_logic,
+            "is_read_only": self.is_read_only
         }
 
 
@@ -261,6 +265,14 @@ class ExcelAgent:
             # Read the sheet
             df = pd.read_excel(file_path, sheet_name=target_sheet)
             
+            # Check for problematic column names (Unnamed columns indicate header issues)
+            unnamed_columns = [col for col in df.columns if str(col).startswith('Unnamed:')]
+            has_header_issues = len(unnamed_columns) > 0
+            header_warning = None
+            
+            if has_header_issues:
+                header_warning = f"⚠️  Detected {len(unnamed_columns)} unnamed columns. This usually indicates the Excel file has merged cells, multi-row headers, or missing column names. Consider cleaning the file headers."
+            
             # Analyze structure
             analysis = {
                 "file_name": os.path.basename(file_path),
@@ -273,7 +285,10 @@ class ExcelAgent:
                 "sample_data": df.head(3).to_dict('records'),
                 "null_counts": df.isnull().sum().to_dict(),
                 "numeric_columns": df.select_dtypes(include=['number']).columns.tolist(),
-                "text_columns": df.select_dtypes(include=['object']).columns.tolist()
+                "text_columns": df.select_dtypes(include=['object']).columns.tolist(),
+                "has_header_issues": has_header_issues,
+                "unnamed_columns_count": len(unnamed_columns),
+                "header_warning": header_warning
             }
             
             return analysis
@@ -316,6 +331,14 @@ class ExcelAgent:
         sample_data = excel_structure.get("sample_data", [])
         total_rows = excel_structure.get('total_rows', 0)
         total_columns = excel_structure.get('total_columns', 0)
+        available_sheets = excel_structure.get('available_sheets', [])
+        current_sheet = excel_structure.get('analyzed_sheet', 'Sheet1')
+        
+        # Safely convert columns to strings
+        columns_str = ', '.join([str(c) for c in available_columns])
+        numeric_str = ', '.join([str(c) for c in numeric_columns]) if numeric_columns else 'None'
+        text_str = ', '.join([str(c) for c in text_columns]) if text_columns else 'None'
+        sheets_str = ', '.join(available_sheets) if available_sheets else current_sheet
         
         prompt = f"""You are an Enterprise Excel Operation Parser with deep domain expertise.
 
@@ -323,15 +346,17 @@ CONTEXT - EXCEL FILE ANALYSIS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📊 Total Rows: {total_rows}
 📋 Total Columns: {total_columns}
+📑 Available Sheets: {sheets_str}
+📄 Currently Working On Sheet: {current_sheet}
 
 AVAILABLE COLUMNS:
-{', '.join(available_columns)}
+{columns_str}
 
 NUMERIC COLUMNS (can be calculated):
-{', '.join(numeric_columns) if numeric_columns else 'None'}
+{numeric_str}
 
 TEXT COLUMNS (categories/labels):
-{', '.join(text_columns) if text_columns else 'None'}
+{text_str}
 
 SAMPLE DATA (First 3 rows for context):
 {json.dumps(sample_data[:3], indent=2)}
@@ -870,21 +895,41 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         Returns:
             AgentDecision object with complete execution plan
         """
-        # Extract information
-        operation_type = parsed_query.get("operation_type", "calculation")
-        sub_operation = parsed_query.get("sub_operation", "sum")
-        source_columns = parsed_query.get("source_columns", [])
-        suggested_names = parsed_query.get("suggested_column_names", ["Result"])
-        target_columns = suggested_names if isinstance(suggested_names, list) else [suggested_names]
-        operation_desc = parsed_query.get("operation_description", "")
-        sheet_name = excel_structure.get("analyzed_sheet", "Sheet1")
+        # Extract information with null safety
+        operation_type = parsed_query.get("operation_type", "calculation") or "calculation"
+        sub_operation = parsed_query.get("sub_operation", "sum") or "sum"
+        source_columns = parsed_query.get("source_columns", []) or []
+        
+        # Ensure source_columns contains only strings (filter out None values)
+        source_columns = [str(col) for col in source_columns if col is not None]
+        
+        # Handle suggested column names with null safety
+        suggested_names = parsed_query.get("suggested_column_names")
+        if suggested_names is None:
+            target_columns = ["Result"]
+        elif isinstance(suggested_names, list):
+            # Filter out None values from the list
+            target_columns = [str(name) for name in suggested_names if name is not None]
+            if not target_columns:
+                target_columns = ["Result"]
+        else:
+            target_columns = [str(suggested_names)]
+        
+        operation_desc = parsed_query.get("operation_description", "") or ""
+        formula_logic = parsed_query.get("formula_logic", "") or ""
+        sheet_name = excel_structure.get("analyzed_sheet", "Sheet1") or "Sheet1"
+        
+        # Check if this is a read-only operation (display/view)
+        is_read_only = False
+        if operation_type == "reporting" and sub_operation in ["data_display", "view", "show", "display"]:
+            is_read_only = True
         
         # For visualization and some operations, no target column needed
         if operation_type in ["visualization", "reporting"]:
             target_columns = None
         
         # Determine risk level based on operation type and parsed query
-        risk_level = parsed_query.get("risk_level", "low")
+        risk_level = parsed_query.get("risk_level", "low") or "low"
         if operation_type == "transformation" and sub_operation in ["remove_column", "deduplicate"]:
             risk_level = "high"
         elif operation_type in ["formatting", "validation"]:
@@ -893,23 +938,35 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         # Requires confirmation for high-risk operations
         requires_confirmation = (risk_level == "high")
         
+        # Helper function to safely join columns
+        def safe_join(columns, separator=", "):
+            if not columns:
+                return "N/A"
+            valid_cols = [str(c) for c in columns if c is not None]
+            return separator.join(valid_cols) if valid_cols else "N/A"
+        
         # Create change description in business language
+        source_cols_str = safe_join(source_columns)
+        target_cols_str = safe_join(target_columns) if target_columns else "N/A"
+        
         if operation_type == "calculation":
-            change_desc = f"Calculate {sub_operation} of {', '.join(source_columns)} and create new column(s): {', '.join(target_columns) if target_columns else 'N/A'}"
+            change_desc = f"Calculate {sub_operation} of {source_cols_str} and create new column(s): {target_cols_str}"
         elif operation_type == "visualization":
-            change_desc = f"Create {sub_operation} chart using {', '.join(source_columns)}"
+            change_desc = f"Create {sub_operation} chart using {source_cols_str}"
         elif operation_type == "transformation":
-            change_desc = f"Transform data: {sub_operation} on {', '.join(source_columns)}"
+            change_desc = f"Transform data: {sub_operation} on {source_cols_str}"
         elif operation_type == "aggregation":
-            change_desc = f"Aggregate data using {sub_operation} on {', '.join(source_columns)}"
+            change_desc = f"Aggregate data using {sub_operation} on {source_cols_str}"
         elif operation_type == "lookup":
-            change_desc = f"Perform {sub_operation} to find matching data in {', '.join(source_columns)}"
+            change_desc = f"Perform {sub_operation} to find matching data in {source_cols_str}"
         elif operation_type == "formatting":
-            change_desc = f"Apply {sub_operation} formatting to {', '.join(source_columns)}"
+            change_desc = f"Apply {sub_operation} formatting to {source_cols_str}"
         elif operation_type == "validation":
-            change_desc = f"Add {sub_operation} validation rules to {', '.join(source_columns)}"
+            change_desc = f"Add {sub_operation} validation rules to {source_cols_str}"
+        elif operation_type == "reporting" and is_read_only:
+            change_desc = f"Display data from {source_cols_str} (read-only, no file modification)"
         else:
-            change_desc = operation_desc
+            change_desc = operation_desc if operation_desc else f"{operation_type}: {sub_operation}"
         
         # Create execution scope-specific assumptions
         execution_scope = "all_rows"
@@ -918,13 +975,16 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         # Build assumptions list
         assumptions = []
         if target_columns:
-            assumptions.append(f"Will create new column(s): {', '.join(target_columns)}")
-        assumptions.append("Original data will remain unchanged (new file created)")
+            assumptions.append(f"Will create new column(s): {target_cols_str}")
+        if is_read_only:
+            assumptions.append("Read-only operation - no file will be modified")
+        else:
+            assumptions.append("Original data will remain unchanged (new file created)")
         assumptions.append(f"Operation will apply to {execution_scope} ({total_rows} rows)")
         if operation_type == "visualization":
             assumptions.append("Chart will be embedded in the Excel file below the data")
         
-        # Create decision
+        # Create decision with all fields including new ones
         decision = AgentDecision(
             operation_type=operation_type,
             sub_operation=sub_operation,
@@ -935,26 +995,72 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
             risk_level=risk_level,
             assumptions=assumptions,
             requires_confirmation=requires_confirmation,
-            change_description=change_desc
+            change_description=change_desc,
+            formula_logic=formula_logic,
+            is_read_only=is_read_only
         )
         
         return decision
     
+    def _save_with_all_sheets(self, file_path: str, modified_df: pd.DataFrame, target_sheet: str, output_path: str):
+        """
+        Save the modified dataframe while preserving all other sheets from the original file.
+        
+        Args:
+            file_path: Original Excel file path
+            modified_df: Modified dataframe to save
+            target_sheet: Name of the sheet that was modified
+            output_path: Output file path
+        """
+        try:
+            # Load all sheets from original file
+            with pd.ExcelFile(file_path) as xls:
+                all_sheets = {}
+                for sheet in xls.sheet_names:
+                    if sheet == target_sheet:
+                        all_sheets[sheet] = modified_df
+                    else:
+                        all_sheets[sheet] = pd.read_excel(xls, sheet_name=sheet)
+            
+            # Save all sheets to output using ExcelWriter
+            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                for sheet_name, sheet_df in all_sheets.items():
+                    sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    
+        except Exception as e:
+            # Fallback: save just the modified sheet
+            modified_df.to_excel(output_path, sheet_name=target_sheet, index=False)
+    
     def execute_excel_operation(self, file_path: str, decision: AgentDecision, output_path: str) -> Dict:
         """
         Executes the planned Excel operation (Enterprise-grade)
+        Preserves all sheets when saving.
         
         Returns:
             Dictionary with execution status and details
         """
         try:
+            # Check for read-only operations
+            if decision.is_read_only:
+                df = pd.read_excel(file_path, sheet_name=decision.sheet_name)
+                return {
+                    "status": "success",
+                    "message": decision.change_description,
+                    "rows_affected": len(df),
+                    "output_file": None,
+                    "changes": decision.assumptions,
+                    "operation": f"{decision.operation_type} - {decision.sub_operation}",
+                    "is_read_only": True,
+                    "data_preview": df.head(10).to_dict('records')
+                }
+            
             # Load Excel file
             df = pd.read_excel(file_path, sheet_name=decision.sheet_name)
             
             # Execute based on operation type
             if decision.operation_type == "calculation":
                 df = self._execute_calculation(df, decision)
-                df.to_excel(output_path, sheet_name=decision.sheet_name, index=False)
+                self._save_with_all_sheets(file_path, df, decision.sheet_name, output_path)
                 
                 return {
                     "status": "success",
@@ -967,7 +1073,7 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
             
             elif decision.operation_type == "transformation":
                 df = self._execute_transformation(df, decision)
-                df.to_excel(output_path, sheet_name=decision.sheet_name, index=False)
+                self._save_with_all_sheets(file_path, df, decision.sheet_name, output_path)
                 
                 return {
                     "status": "success",
@@ -980,7 +1086,7 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
             
             elif decision.operation_type == "aggregation":
                 df = self._execute_aggregation(df, decision)
-                df.to_excel(output_path, sheet_name=decision.sheet_name, index=False)
+                self._save_with_all_sheets(file_path, df, decision.sheet_name, output_path)
                 
                 return {
                     "status": "success",
@@ -992,7 +1098,7 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
                 }
             
             elif decision.operation_type == "formatting":
-                return self._execute_formatting(file_path, decision, output_path)
+                return self._execute_formatting(file_path, df, decision, output_path)
             
             elif decision.operation_type == "visualization":
                 return self._execute_visualization(file_path, df, decision, output_path)
@@ -1001,8 +1107,8 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
                 return self._execute_validation(file_path, df, decision, output_path)
             
             elif decision.operation_type == "lookup":
-                df = self._execute_lookup(df, decision)
-                df.to_excel(output_path, sheet_name=decision.sheet_name, index=False)
+                df = self._execute_lookup(df, decision, file_path=file_path)
+                self._save_with_all_sheets(file_path, df, decision.sheet_name, output_path)
                 
                 return {
                     "status": "success",
@@ -1014,8 +1120,8 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
                 }
             
             else:
-                # Default: save as is
-                df.to_excel(output_path, sheet_name=decision.sheet_name, index=False)
+                # Default: save as is (preserving all sheets)
+                self._save_with_all_sheets(file_path, df, decision.sheet_name, output_path)
                 
                 return {
                     "status": "success",
@@ -1090,8 +1196,9 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         
         if sub_op == "add_column":
             # Add new empty column(s)
-            for col in target_cols:
-                df[col] = None
+            if target_cols:
+                for col in target_cols:
+                    df[col] = None
         
         elif sub_op == "rename_column":
             # Rename column (source[0] -> target[0])
@@ -1123,38 +1230,253 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
             if source_cols and target_cols:
                 df[target_cols[0]] = df[source_cols].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
         
+        elif sub_op == "fill_missing" or sub_op == "replace_nan" or sub_op == "fillna":
+            # Fill missing/NaN values with a specified value
+            # Get the fill value from formula_logic or use a default
+            fill_value = decision.formula_logic if decision.formula_logic else "N/A"
+            
+            # If specific columns are provided, fill only those
+            if source_cols:
+                for col in source_cols:
+                    if col in df.columns:
+                        df[col] = df[col].fillna(fill_value)
+            else:
+                # Fill all columns
+                df = df.fillna(fill_value)
+        
+        elif sub_op == "replace_values":
+            # Replace specific values in columns
+            # formula_logic should contain: "old_value->new_value"
+            if decision.formula_logic and "->" in decision.formula_logic:
+                old_val, new_val = decision.formula_logic.split("->", 1)
+                old_val = old_val.strip()
+                new_val = new_val.strip()
+                
+                if source_cols:
+                    for col in source_cols:
+                        if col in df.columns:
+                            df[col] = df[col].replace(old_val, new_val)
+                else:
+                    df = df.replace(old_val, new_val)
+        
+        elif sub_op == "filter":
+            # Filter rows based on condition
+            # formula_logic should contain condition like: "column_name > 100" or "column_name == 'value'"
+            if decision.formula_logic:
+                condition = decision.formula_logic.strip()
+                try:
+                    # Parse common filter patterns
+                    # Pattern: column_name operator value
+                    operators = ['>=', '<=', '!=', '==', '>', '<', 'contains', 'startswith', 'endswith']
+                    
+                    for op in operators:
+                        if op in condition:
+                            parts = condition.split(op, 1)
+                            if len(parts) == 2:
+                                col_name = parts[0].strip()
+                                value = parts[1].strip().strip('"').strip("'")
+                                
+                                if col_name in df.columns:
+                                    if op == 'contains':
+                                        df = df[df[col_name].astype(str).str.contains(value, case=False, na=False)]
+                                    elif op == 'startswith':
+                                        df = df[df[col_name].astype(str).str.startswith(value, na=False)]
+                                    elif op == 'endswith':
+                                        df = df[df[col_name].astype(str).str.endswith(value, na=False)]
+                                    elif op == '>=':
+                                        df = df[df[col_name] >= float(value)]
+                                    elif op == '<=':
+                                        df = df[df[col_name] <= float(value)]
+                                    elif op == '>':
+                                        df = df[df[col_name] > float(value)]
+                                    elif op == '<':
+                                        df = df[df[col_name] < float(value)]
+                                    elif op == '==':
+                                        # Try numeric first, then string
+                                        try:
+                                            df = df[df[col_name] == float(value)]
+                                        except:
+                                            df = df[df[col_name] == value]
+                                    elif op == '!=':
+                                        try:
+                                            df = df[df[col_name] != float(value)]
+                                        except:
+                                            df = df[df[col_name] != value]
+                                break
+                except Exception as e:
+                    print(f"   ⚠️  Filter parsing error: {e}")
+        
+        elif sub_op == "sort_desc" or sub_op == "sort_descending":
+            # Sort by columns in descending order
+            if source_cols:
+                df.sort_values(by=source_cols, ascending=False, inplace=True)
+        
         return df
     
-    def _execute_lookup(self, df: pd.DataFrame, decision: AgentDecision) -> pd.DataFrame:
-        """Execute lookup/reference operations"""
-        # Basic implementation - can be enhanced for cross-sheet lookups
-        sub_op = decision.sub_operation.lower()
+    def _execute_lookup(self, df: pd.DataFrame, decision: AgentDecision, file_path: str = None) -> pd.DataFrame:
+        """
+        Execute lookup/reference operations including cross-sheet lookups.
         
-        # Placeholder for xlookup, vlookup implementations
-        # Would require reference table/sheet information
+        Supports:
+        - vlookup: Look up value in another column/sheet
+        - xlookup: Modern lookup with more flexibility
+        - index_match: INDEX-MATCH combination
+        """
+        sub_op = decision.sub_operation.lower()
+        source_cols = decision.source_columns
+        target_cols = decision.target_columns
+        formula_logic = decision.formula_logic or ""
+        
+        if sub_op in ["vlookup", "xlookup", "lookup"]:
+            # formula_logic format: "lookup_col:return_col:sheet_name" or "lookup_col:return_col"
+            if formula_logic and ":" in formula_logic:
+                parts = formula_logic.split(":")
+                if len(parts) >= 2:
+                    lookup_col = parts[0].strip()
+                    return_col = parts[1].strip()
+                    ref_sheet = parts[2].strip() if len(parts) > 2 else decision.sheet_name
+                    
+                    # Load reference sheet
+                    if file_path:
+                        try:
+                            ref_df = pd.read_excel(file_path, sheet_name=ref_sheet)
+                            
+                            # Perform lookup
+                            if lookup_col in df.columns and lookup_col in ref_df.columns and return_col in ref_df.columns:
+                                # Create lookup dictionary
+                                lookup_dict = dict(zip(ref_df[lookup_col], ref_df[return_col]))
+                                
+                                # Create new column with looked up values
+                                new_col_name = target_cols[0] if target_cols else f"{return_col}_lookup"
+                                df[new_col_name] = df[lookup_col].map(lookup_dict)
+                        except Exception as e:
+                            print(f"   ⚠️  Lookup error: {e}")
+        
+        elif sub_op == "index_match":
+            # Similar to vlookup but with more flexibility
+            if source_cols and len(source_cols) >= 2 and target_cols:
+                match_col = source_cols[0]
+                return_col = source_cols[1]
+                
+                if match_col in df.columns and return_col in df.columns:
+                    # Create mapping
+                    lookup_dict = dict(zip(df[match_col], df[return_col]))
+                    df[target_cols[0]] = df[match_col].map(lookup_dict)
+        
+        elif sub_op == "merge" or sub_op == "join_sheets":
+            # Merge with another sheet
+            # formula_logic format: "sheet_name:join_column:join_type"
+            if formula_logic and ":" in formula_logic and file_path:
+                parts = formula_logic.split(":")
+                if len(parts) >= 2:
+                    ref_sheet = parts[0].strip()
+                    join_col = parts[1].strip()
+                    join_type = parts[2].strip() if len(parts) > 2 else "left"
+                    
+                    try:
+                        ref_df = pd.read_excel(file_path, sheet_name=ref_sheet)
+                        if join_col in df.columns and join_col in ref_df.columns:
+                            df = df.merge(ref_df, on=join_col, how=join_type)
+                    except Exception as e:
+                        print(f"   ⚠️  Merge error: {e}")
         
         return df
     
     def _execute_validation(self, file_path: str, df: pd.DataFrame, decision: AgentDecision, output_path: str) -> Dict:
-        """Execute data validation operations"""
+        """
+        Execute data validation operations using openpyxl.
+        
+        Supports:
+        - dropdown: Create dropdown list from values
+        - range_check: Validate numeric ranges
+        - text_length: Validate text length
+        - custom: Custom validation formula
+        """
+        from openpyxl.worksheet.datavalidation import DataValidation
+        
         try:
-            # Save dataframe first
-            df.to_excel(output_path, sheet_name=decision.sheet_name, index=False)
+            # Save dataframe first (preserving all sheets)
+            self._save_with_all_sheets(file_path, df, decision.sheet_name, output_path)
             
             # Load with openpyxl for validation rules
             wb = openpyxl.load_workbook(output_path)
             ws = wb[decision.sheet_name]
             
-            # Add validation rules (basic implementation)
-            # Can be enhanced with dropdown lists, range checks, etc.
+            sub_op = decision.sub_operation.lower()
+            source_cols = decision.source_columns
+            formula_logic = decision.formula_logic or ""
+            
+            # Get column letters for source columns
+            col_positions = {col: idx + 1 for idx, col in enumerate(df.columns)}
+            
+            validation_applied = []
+            
+            for col in source_cols:
+                if col in col_positions:
+                    col_letter = openpyxl.utils.get_column_letter(col_positions[col])
+                    cell_range = f"{col_letter}2:{col_letter}{len(df) + 1}"
+                    
+                    if sub_op == "dropdown":
+                        # Create dropdown from formula_logic values (comma-separated)
+                        if formula_logic:
+                            options = formula_logic.replace(";", ",")
+                            dv = DataValidation(type="list", formula1=f'"{options}"', allow_blank=True)
+                            dv.error = "Please select from the dropdown list"
+                            dv.errorTitle = "Invalid Input"
+                            dv.prompt = "Select a value from the list"
+                            dv.promptTitle = "Dropdown Selection"
+                            ws.add_data_validation(dv)
+                            dv.add(cell_range)
+                            validation_applied.append(f"Dropdown on {col}: {options}")
+                    
+                    elif sub_op == "range_check" or sub_op == "numeric_range":
+                        # Validate numeric range: formula_logic = "min:max"
+                        if formula_logic and ":" in formula_logic:
+                            parts = formula_logic.split(":")
+                            min_val = parts[0].strip()
+                            max_val = parts[1].strip() if len(parts) > 1 else None
+                            
+                            if min_val and max_val:
+                                dv = DataValidation(type="decimal", operator="between",
+                                                   formula1=min_val, formula2=max_val)
+                            elif min_val:
+                                dv = DataValidation(type="decimal", operator="greaterThanOrEqual",
+                                                   formula1=min_val)
+                            dv.error = f"Value must be between {min_val} and {max_val}"
+                            dv.errorTitle = "Invalid Value"
+                            ws.add_data_validation(dv)
+                            dv.add(cell_range)
+                            validation_applied.append(f"Range check on {col}: {min_val} to {max_val}")
+                    
+                    elif sub_op == "text_length":
+                        # Validate text length: formula_logic = "max_length"
+                        if formula_logic:
+                            max_len = formula_logic.strip()
+                            dv = DataValidation(type="textLength", operator="lessThanOrEqual",
+                                               formula1=max_len)
+                            dv.error = f"Text must be {max_len} characters or less"
+                            dv.errorTitle = "Text Too Long"
+                            ws.add_data_validation(dv)
+                            dv.add(cell_range)
+                            validation_applied.append(f"Text length on {col}: max {max_len}")
+                    
+                    elif sub_op == "no_duplicates" or sub_op == "unique":
+                        # Mark duplicates (validation can't prevent, but we can highlight)
+                        dv = DataValidation(type="custom", formula1=f'=COUNTIF({col_letter}:{col_letter},{col_letter}2)=1')
+                        dv.error = "Duplicate value detected"
+                        dv.errorTitle = "Duplicate Entry"
+                        ws.add_data_validation(dv)
+                        dv.add(cell_range)
+                        validation_applied.append(f"Unique check on {col}")
             
             wb.save(output_path)
             
             return {
                 "status": "success",
-                "message": f"Validation rules applied: {decision.sub_operation}",
+                "message": f"Validation rules applied: {', '.join(validation_applied) if validation_applied else decision.sub_operation}",
                 "output_file": output_path,
-                "changes": decision.assumptions,
+                "rows_affected": len(df),
+                "changes": decision.assumptions + validation_applied,
                 "operation": f"{decision.operation_type} - {decision.sub_operation}"
             }
         except Exception as e:
@@ -1164,27 +1486,220 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
             }
     
     def _execute_aggregation(self, df: pd.DataFrame, decision: AgentDecision) -> pd.DataFrame:
-        """Execute aggregation operations"""
-        # This would handle group by operations
-        # For now, basic implementation
+        """
+        Execute aggregation operations.
+        
+        Supports:
+        - group_by: Group data and aggregate
+        - pivot_table: Create pivot table
+        - summary_stats: Generate summary statistics
+        - subtotals: Add subtotal rows
+        """
+        sub_op = decision.sub_operation.lower()
+        source_cols = decision.source_columns
+        target_cols = decision.target_columns
+        formula_logic = decision.formula_logic or "sum"
+        
+        if sub_op == "group_by" or sub_op == "groupby":
+            # formula_logic format: "agg_column:agg_function" or just "agg_function"
+            if source_cols:
+                group_cols = source_cols[:-1] if len(source_cols) > 1 else source_cols
+                agg_col = source_cols[-1] if len(source_cols) > 1 else None
+                
+                # Parse aggregation function from formula_logic
+                agg_func = formula_logic.lower() if formula_logic else "sum"
+                if agg_func not in ["sum", "mean", "count", "min", "max", "median", "std"]:
+                    agg_func = "sum"
+                
+                if agg_col and agg_col in df.columns:
+                    # Group by and aggregate
+                    grouped = df.groupby(group_cols, as_index=False).agg({agg_col: agg_func})
+                    df = grouped
+                else:
+                    # Just group and count
+                    grouped = df.groupby(group_cols, as_index=False).size()
+                    grouped.columns = list(group_cols) + ['Count']
+                    df = grouped
+        
+        elif sub_op == "pivot_table" or sub_op == "pivot":
+            # formula_logic format: "values_col:agg_func"
+            if len(source_cols) >= 2:
+                index_col = source_cols[0]
+                columns_col = source_cols[1] if len(source_cols) > 1 else None
+                values_col = source_cols[2] if len(source_cols) > 2 else None
+                
+                agg_func = formula_logic.lower() if formula_logic else "sum"
+                
+                if values_col and values_col in df.columns:
+                    pivot = pd.pivot_table(df, values=values_col, index=index_col,
+                                          columns=columns_col, aggfunc=agg_func, fill_value=0)
+                    df = pivot.reset_index()
+                else:
+                    # Simple pivot with count
+                    pivot = pd.pivot_table(df, index=index_col, columns=columns_col,
+                                          aggfunc='size', fill_value=0)
+                    df = pivot.reset_index()
+        
+        elif sub_op == "summary_stats" or sub_op == "describe":
+            # Generate summary statistics for numeric columns
+            if source_cols:
+                numeric_cols = [c for c in source_cols if c in df.select_dtypes(include=['number']).columns]
+                if numeric_cols:
+                    summary = df[numeric_cols].describe().T
+                    summary = summary.reset_index()
+                    summary.columns = ['Column', 'Count', 'Mean', 'Std', 'Min', '25%', '50%', '75%', 'Max']
+                    df = summary
+            else:
+                df = df.describe().T.reset_index()
+        
+        elif sub_op == "subtotals":
+            # Add subtotal rows for grouped data
+            if source_cols:
+                group_col = source_cols[0]
+                numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+                
+                if group_col in df.columns and numeric_cols:
+                    # Calculate subtotals
+                    subtotals = df.groupby(group_col)[numeric_cols].sum()
+                    subtotals['_is_subtotal'] = True
+                    
+                    # Interleave with original data
+                    result_dfs = []
+                    for group_val in df[group_col].unique():
+                        group_data = df[df[group_col] == group_val].copy()
+                        group_data['_is_subtotal'] = False
+                        result_dfs.append(group_data)
+                        
+                        # Add subtotal row
+                        subtotal_row = subtotals.loc[group_val].to_frame().T
+                        subtotal_row[group_col] = f"{group_val} - SUBTOTAL"
+                        subtotal_row['_is_subtotal'] = True
+                        result_dfs.append(subtotal_row)
+                    
+                    df = pd.concat(result_dfs, ignore_index=True)
+        
+        elif sub_op == "value_counts" or sub_op == "frequency":
+            # Count frequency of values in a column
+            if source_cols and source_cols[0] in df.columns:
+                counts = df[source_cols[0]].value_counts().reset_index()
+                counts.columns = [source_cols[0], 'Count']
+                df = counts
+        
         return df
     
-    def _execute_formatting(self, file_path: str, decision: AgentDecision, output_path: str) -> Dict:
-        """Execute formatting operations using openpyxl"""
-        # Load workbook
-        wb = openpyxl.load_workbook(file_path)
-        ws = wb[decision.sheet_name]
+    def _execute_formatting(self, file_path: str, df: pd.DataFrame, decision: AgentDecision, output_path: str) -> Dict:
+        """
+        Execute formatting operations using openpyxl.
         
-        # Apply formatting based on decision
-        # Example: Highlight negative values in red
+        Supports:
+        - conditional_color: Color cells based on conditions
+        - highlight: Highlight specific values
+        - data_bars: Add data bar visualization
+        - color_scale: Apply color scale (heatmap)
+        """
+        from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
+        from openpyxl.styles import PatternFill, Font, Border, Side
         
-        wb.save(output_path)
-        
-        return {
-            "status": "success",
-            "message": "Formatting applied successfully",
-            "output_file": output_path
-        }
+        try:
+            # Save dataframe first (preserving all sheets)
+            self._save_with_all_sheets(file_path, df, decision.sheet_name, output_path)
+            
+            # Load workbook
+            wb = openpyxl.load_workbook(output_path)
+            ws = wb[decision.sheet_name]
+            
+            sub_op = decision.sub_operation.lower()
+            source_cols = decision.source_columns
+            formula_logic = decision.formula_logic or ""
+            
+            # Get column positions
+            col_positions = {col: idx + 1 for idx, col in enumerate(df.columns)}
+            
+            formatting_applied = []
+            
+            for col in source_cols:
+                if col in col_positions:
+                    col_letter = openpyxl.utils.get_column_letter(col_positions[col])
+                    cell_range = f"{col_letter}2:{col_letter}{len(df) + 1}"
+                    
+                    if sub_op == "highlight_negative" or sub_op == "highlight_negatives":
+                        # Highlight negative values in red
+                        red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                        rule = FormulaRule(formula=[f'{col_letter}2<0'], fill=red_fill)
+                        ws.conditional_formatting.add(cell_range, rule)
+                        formatting_applied.append(f"Highlighted negatives in {col}")
+                    
+                    elif sub_op == "highlight_positive" or sub_op == "highlight_positives":
+                        # Highlight positive values in green
+                        green_fill = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
+                        rule = FormulaRule(formula=[f'{col_letter}2>0'], fill=green_fill)
+                        ws.conditional_formatting.add(cell_range, rule)
+                        formatting_applied.append(f"Highlighted positives in {col}")
+                    
+                    elif sub_op == "highlight" or sub_op == "conditional_color":
+                        # Highlight based on condition in formula_logic: ">100" or "==value"
+                        if formula_logic:
+                            # Parse condition
+                            condition = formula_logic.strip()
+                            fill_color = "FFFF00"  # Default yellow
+                            
+                            # Check for color specification: ">100:FF0000"
+                            if ":" in condition and len(condition.split(":")[-1]) == 6:
+                                parts = condition.rsplit(":", 1)
+                                condition = parts[0]
+                                fill_color = parts[1]
+                            
+                            fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                            formula = f'{col_letter}2{condition}'
+                            rule = FormulaRule(formula=[formula], fill=fill)
+                            ws.conditional_formatting.add(cell_range, rule)
+                            formatting_applied.append(f"Conditional formatting on {col}: {condition}")
+                    
+                    elif sub_op == "data_bars":
+                        # Add data bars
+                        rule = DataBarRule(start_type='min', end_type='max',
+                                          color="638EC6", showValue=True, minLength=None, maxLength=None)
+                        ws.conditional_formatting.add(cell_range, rule)
+                        formatting_applied.append(f"Data bars on {col}")
+                    
+                    elif sub_op == "color_scale" or sub_op == "heatmap":
+                        # Apply color scale (red-yellow-green)
+                        rule = ColorScaleRule(start_type='min', start_color='F8696B',
+                                             mid_type='percentile', mid_value=50, mid_color='FFEB84',
+                                             end_type='max', end_color='63BE7B')
+                        ws.conditional_formatting.add(cell_range, rule)
+                        formatting_applied.append(f"Color scale on {col}")
+                    
+                    elif sub_op == "bold_header":
+                        # Make header bold
+                        ws[f'{col_letter}1'].font = Font(bold=True)
+                        formatting_applied.append(f"Bold header for {col}")
+            
+            # Apply header formatting to all columns if no specific columns
+            if sub_op == "format_headers" or sub_op == "style_headers":
+                for col_idx in range(1, len(df.columns) + 1):
+                    col_letter = openpyxl.utils.get_column_letter(col_idx)
+                    ws[f'{col_letter}1'].font = Font(bold=True)
+                    ws[f'{col_letter}1'].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                    ws[f'{col_letter}1'].font = Font(bold=True, color="FFFFFF")
+                formatting_applied.append("Formatted all headers")
+            
+            wb.save(output_path)
+            
+            return {
+                "status": "success",
+                "message": f"Formatting applied: {', '.join(formatting_applied) if formatting_applied else 'Formatting complete'}",
+                "output_file": output_path,
+                "rows_affected": len(df),
+                "changes": decision.assumptions + formatting_applied,
+                "operation": f"{decision.operation_type} - {decision.sub_operation}"
+            }
+            
+        except Exception as e:
+            return {
+                "status": "failed",
+                "error": f"Formatting failed: {str(e)}"
+            }
     
     def _execute_visualization(self, file_path: str, df: pd.DataFrame, decision: AgentDecision, output_path: str) -> Dict:
         """Execute visualization operations - create charts in Excel"""
@@ -1197,7 +1712,7 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
             ws = wb[decision.sheet_name]
             
             # Determine chart type from formula logic
-            formula_lower = decision.formula_logic.lower()
+            formula_lower = decision.  formula_logic.lower()
             source_cols = decision.source_columns
             
             # Identify category column (usually text/product name) and data columns (numeric)
@@ -1289,11 +1804,17 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
                 "error": f"Chart creation failed: {str(e)}"
             }
     
-    def process_query(self, file_path: str, query: str, output_path: Optional[str] = None) -> Dict:
+    def process_query(self, file_path: str, query: str, output_path: Optional[str] = None, sheet_name: Optional[str] = None) -> Dict:
         """
         Main entry point: Process user query on Excel file
         
         This is the orchestration method that follows the complete workflow
+        
+        Args:
+            file_path: Path to the Excel file
+            query: User's natural language query
+            output_path: Optional path for output file
+            sheet_name: Optional specific sheet to work with
         """
         print("\n" + "="*60)
         print("🤖 EXCEL AGENT - PROCESSING REQUEST")
@@ -1306,13 +1827,16 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         
         # STEP 1: Analyze Excel Structure
         print("\n📊 STEP 1: Analyzing Excel Structure...")
-        excel_structure = self.analyze_excel_structure(file_path)
+        excel_structure = self.analyze_excel_structure(file_path, sheet_name=sheet_name)
         
         if "error" in excel_structure:
             return {"status": "failed", "error": excel_structure["error"]}
         
-        print(f"   ✓ Found {excel_structure['total_columns']} columns: {', '.join(excel_structure['columns'])}")
+        # Safe column display
+        columns_display = ', '.join([str(c) for c in excel_structure.get('columns', [])])
+        print(f"   ✓ Found {excel_structure['total_columns']} columns: {columns_display}")
         print(f"   ✓ Total rows: {excel_structure['total_rows']}")
+        print(f"   ✓ Sheet: {excel_structure.get('analyzed_sheet', 'N/A')}")
         
         # STEP 2: Parse User Query
         print(f"\n🧠 STEP 2: Analyzing User Intent...")
@@ -1583,16 +2107,53 @@ def run_interactive_agent(api_key: str):
             
             # Display file information
             print(f"\n✅ Successfully loaded: {structure['file_name']}")
-            print(f"   📄 Sheet: {structure['analyzed_sheet']}")
+            
+            # Handle multiple sheets - let user select
+            available_sheets = structure.get('available_sheets', [])
+            selected_sheet = structure['analyzed_sheet']
+            
+            if len(available_sheets) > 1:
+                print(f"\n📑 Multiple sheets detected ({len(available_sheets)} sheets):")
+                for idx, sheet in enumerate(available_sheets, 1):
+                    marker = "→" if sheet == selected_sheet else " "
+                    print(f"   {marker} {idx}. {sheet}")
+                
+                sheet_choice = input("\n📄 Enter sheet number or name to work with (default: 1): ").strip()
+                
+                if sheet_choice:
+                    # Try to parse as number
+                    try:
+                        sheet_idx = int(sheet_choice) - 1
+                        if 0 <= sheet_idx < len(available_sheets):
+                            selected_sheet = available_sheets[sheet_idx]
+                        else:
+                            print(f"⚠️  Invalid sheet number. Using first sheet.")
+                            selected_sheet = available_sheets[0]
+                    except ValueError:
+                        # Treat as sheet name
+                        if sheet_choice in available_sheets:
+                            selected_sheet = sheet_choice
+                        else:
+                            print(f"⚠️  Sheet '{sheet_choice}' not found. Using first sheet.")
+                            selected_sheet = available_sheets[0]
+                
+                # Re-analyze with selected sheet if different
+                if selected_sheet != structure['analyzed_sheet']:
+                    structure = agent.analyze_excel_structure(file_path, sheet_name=selected_sheet)
+            
+            print(f"\n   📄 Working with sheet: {structure['analyzed_sheet']}")
             print(f"   📊 Rows: {structure['total_rows']}")
-            print(f"   📋 Columns ({structure['total_columns']}): {', '.join(structure['columns'])}")
+            print(f"   📋 Columns ({structure['total_columns']}): {', '.join([str(c) for c in structure['columns']])}")
+            
+            # Show header warning if present
+            if structure.get('header_warning'):
+                print(f"\n   {structure['header_warning']}")
             
             # Show sample data
             if structure.get('sample_data'):
                 print(f"\n   Sample Data (first 3 rows):")
-                import pandas as pd
                 sample_df = pd.DataFrame(structure['sample_data'])
-                print("   " + "\n   ".join(sample_df.to_string(index=False).split('\n')))
+                print("   " + "\n   ".join(sample_df.to_string(index=False).split('\n')[:6]))
             
             break
             
@@ -1620,17 +2181,24 @@ def run_interactive_agent(api_key: str):
     print("\n  🔧 Transformations:")
     print("    • 'Sort data by Sales descending'")
     print("    • 'Remove duplicate entries'")
+    print("    • 'Replace NaN values with N/A'")
     print("\n  🎨 Formatting:")
     print("    • 'Highlight cells where profit is negative'")
-    print("\nType 'quit', 'exit', or 'q' to stop.")
-    print("Type 'new' to load a different Excel file.")
+    print("\n📌 COMMANDS:")
+    print("  • Type 'quit', 'exit', or 'q' to stop.")
+    print("  • Type 'new' to load a different Excel file.")
+    print("  • Type 'sheets' to list available sheets.")
+    print("  • Type 'switch sheet <name>' to switch to a different sheet.")
     print("="*70)
     
     query_count = 0
     current_file = file_path
-    
+    current_sheet = selected_sheet
+    current_structure = structure
+
     while True:
         print(f"\n{'─'*70}")
+        print(f"📄 Current: {os.path.basename(current_file)} → Sheet: {current_sheet}")
         query = input("\n💬 What would you like to modify in the Excel? ").strip()
         
         # Handle exit commands
@@ -1645,6 +2213,44 @@ def run_interactive_agent(api_key: str):
             print("\n🔄 Loading a new Excel file...\n")
             run_interactive_agent(api_key)
             return
+        
+        # Handle sheets listing command
+        if query.lower() == 'sheets':
+            print(f"\n📑 Available sheets in {os.path.basename(current_file)}:")
+            for idx, sheet in enumerate(current_structure.get('available_sheets', []), 1):
+                marker = "→" if sheet == current_sheet else " "
+                print(f"   {marker} {idx}. {sheet}")
+            continue
+        
+        # Handle switch sheet command
+        if query.lower().startswith('switch sheet'):
+            sheet_name = query[12:].strip()
+            if not sheet_name:
+                print("⚠️  Please specify a sheet name. Usage: switch sheet <name>")
+                continue
+            
+            available_sheets = current_structure.get('available_sheets', [])
+            
+            # Try to find the sheet (by name or number)
+            target_sheet = None
+            try:
+                sheet_idx = int(sheet_name) - 1
+                if 0 <= sheet_idx < len(available_sheets):
+                    target_sheet = available_sheets[sheet_idx]
+            except ValueError:
+                if sheet_name in available_sheets:
+                    target_sheet = sheet_name
+            
+            if target_sheet:
+                print(f"\n🔄 Switching to sheet: {target_sheet}")
+                current_structure = agent.analyze_excel_structure(current_file, sheet_name=target_sheet)
+                current_sheet = target_sheet
+                print(f"   📊 Rows: {current_structure['total_rows']}")
+                print(f"   📋 Columns: {', '.join([str(c) for c in current_structure['columns']])}")
+            else:
+                print(f"❌ Sheet '{sheet_name}' not found.")
+                print(f"   Available sheets: {', '.join(available_sheets)}")
+            continue
         
         # Skip empty queries
         if not query:
@@ -1664,49 +2270,71 @@ def run_interactive_agent(api_key: str):
             result = agent.process_query(
                 file_path=current_file,
                 query=query,
-                output_path=output_path
+                output_path=output_path,
+                sheet_name=current_sheet
             )
             
             # Handle results
             if result.get("status") == "success":
-                print(f"\n{'='*70}")
-                print("✅ MODIFICATION SUCCESSFUL!")
-                print(f"{'='*70}")
-                print(f"📁 New file created: {result['output_file']}")
-                print(f"📝 {result['message']}")
-                print(f"📊 Rows modified: {result['rows_affected']}")
-                
-                # Show preview
-                try:
-                    import pandas as pd
-                    preview_df = pd.read_excel(output_path)
-                    print(f"\n📋 Preview of modified data:")
-                    print(preview_df.to_string(index=False))
-                except:
-                    pass
-                
-                # Ask if they want to continue with the modified file
-                print(f"\n{'─'*70}")
-                continue_choice = input("\n🔄 Use this modified file for next query? (yes/no, default: yes): ").strip().lower()
-                
-                if continue_choice in ['', 'yes', 'y']:
-                    current_file = output_path
-                    print(f"✅ Now working with: {output_path}")
+                # Check if this was a read-only operation
+                if result.get("is_read_only"):
+                    print(f"\n{'='*70}")
+                    print("📊 DATA DISPLAY (Read-Only)")
+                    print(f"{'='*70}")
+                    print(f"📝 {result['message']}")
+                    print(f"📊 Total rows: {result['rows_affected']}")
+                    
+                    # Show data preview
+                    if result.get('data_preview'):
+                        print(f"\n📋 Data Preview (first 10 rows):")
+                        preview_df = pd.DataFrame(result['data_preview'])
+                        print(preview_df.to_string(index=False))
+                    
+                    # No file was modified for read-only operations
+                    query_count -= 1  # Don't count read-only queries
                 else:
-                    print(f"✅ Still working with: {current_file}")
+                    print(f"\n{'='*70}")
+                    print("✅ MODIFICATION SUCCESSFUL!")
+                    print(f"{'='*70}")
+                    print(f"📁 New file created: {result['output_file']}")
+                    print(f"📝 {result['message']}")
+                    print(f"📊 Rows modified: {result['rows_affected']}")
+                    
+                    # Show preview
+                    try:
+                        preview_df = pd.read_excel(output_path, sheet_name=current_sheet)
+                        print(f"\n📋 Preview of modified data (first 10 rows):")
+                        print(preview_df.head(10).to_string(index=False))
+                    except:
+                        pass
+                    
+                    # Ask if they want to continue with the modified file
+                    print(f"\n{'─'*70}")
+                    continue_choice = input("\n🔄 Use this modified file for next query? (yes/no, default: yes): ").strip().lower()
+                    
+                    if continue_choice in ['', 'yes', 'y']:
+                        current_file = output_path
+                        # Re-analyze the structure for the new file
+                        current_structure = agent.analyze_excel_structure(current_file, sheet_name=current_sheet)
+                        print(f"✅ Now working with: {output_path}")
+                    else:
+                        print(f"✅ Still working with: {current_file}")
             
             elif result.get("status") == "clarification_needed":
                 print(f"\n❓ I need clarification:")
-                print(f"   {result['question']}")
+                print(f"   {result.get('question', 'Please provide more details.')}")
                 print("\n💡 Please rephrase your query with more details.")
+                query_count -= 1  # Don't count failed queries
             
             else:
                 print(f"\n❌ Error: {result.get('error', 'Unknown error occurred')}")
                 print("💡 Please try rephrasing your query or check the column names.")
+                query_count -= 1  # Don't count failed queries
         
         except Exception as e:
             print(f"\n❌ Unexpected error: {e}")
             print("💡 Please try again with a different query.")
+            query_count -= 1  # Don't count failed queries
 
 
 # ==========================================
