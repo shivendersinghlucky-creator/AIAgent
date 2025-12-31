@@ -422,25 +422,31 @@ class ExcelAgent:
             "unknown_columns": []      # Cannot classify
         }
         
-        for col in df.columns:
-            col_data = df[col].dropna()
-            if len(col_data) == 0:
+        # Use column index to avoid issues with duplicate column names
+        for col_idx, col in enumerate(df.columns):
+            try:
+                # Use iloc with column index to avoid duplicate column name issues
+                col_data = df.iloc[:, col_idx].dropna()
+                if len(col_data) == 0:
+                    classification["unknown_columns"].append(col)
+                    continue
+                
+                # Check if date column
+                if pd.api.types.is_datetime64_any_dtype(df.iloc[:, col_idx]):
+                    classification["date_columns"].append(col)
+                    continue
+                
+                # Check if numeric
+                if pd.api.types.is_numeric_dtype(df.iloc[:, col_idx]):
+                    classification["measure_columns"].append(col)
+                    continue
+                
+                # For text columns, classify as entity or context
+                col_lower = str(col).lower()  # Ensure col is string
+                unique_ratio = df.iloc[:, col_idx].nunique() / len(df) if len(df) > 0 else 0
+            except Exception:
                 classification["unknown_columns"].append(col)
                 continue
-            
-            # Check if date column
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
-                classification["date_columns"].append(col)
-                continue
-            
-            # Check if numeric
-            if pd.api.types.is_numeric_dtype(df[col]):
-                classification["measure_columns"].append(col)
-                continue
-            
-            # For text columns, classify as entity or context
-            col_lower = col.lower()
-            unique_ratio = df[col].nunique() / len(df) if len(df) > 0 else 0
             
             # Entity indicators: high uniqueness, contains name/id keywords
             entity_keywords = ['name', 'id', 'student', 'employee', 'person', 'customer', 'user', 'member']
@@ -469,9 +475,18 @@ class ExcelAgent:
         - Remove line breaks
         - Trim whitespace
         - Convert to string
+        - Handle Series (take first value)
         """
-        if pd.isna(value) or value is None:
-            return ""
+        # Handle Series - take first value if passed
+        if isinstance(value, pd.Series):
+            value = value.iloc[0] if len(value) > 0 else None
+        
+        # Handle None/NaN with try/except to avoid Series ambiguity
+        try:
+            if value is None or pd.isna(value):
+                return ""
+        except (ValueError, TypeError):
+            pass
         
         val_str = str(value)
         # Remove line breaks
