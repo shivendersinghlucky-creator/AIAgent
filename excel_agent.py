@@ -262,6 +262,298 @@ class ExcelAgent:
         else:
             return data
     
+    def _detect_header_row(self, df: pd.DataFrame, max_rows_to_scan: int = 10) -> int:
+        """
+        Detect the true header row by finding the row with highest non-null ratio
+        and most string-like values (headers are typically text).
+        
+        Returns:
+            Index of the detected header row (0-based)
+        """
+        if len(df) == 0:
+            return 0
+        
+        rows_to_check = min(max_rows_to_scan, len(df))
+        best_row = 0
+        best_score = 0
+        
+        for i in range(rows_to_check):
+            row = df.iloc[i]
+            # Calculate score based on:
+            # 1. Non-null ratio
+            # 2. String values (headers are usually text)
+            # 3. Unique values (headers should be unique)
+            
+            non_null_count = row.notna().sum()
+            non_null_ratio = non_null_count / len(row) if len(row) > 0 else 0
+            
+            # Count string values that look like headers (not numbers)
+            string_count = 0
+            for val in row:
+                if pd.notna(val):
+                    val_str = str(val).strip()
+                    # Check if it looks like a header (text, not pure number)
+                    try:
+                        float(val_str.replace(',', ''))
+                        # It's a number, less likely to be header
+                    except ValueError:
+                        string_count += 1
+            
+            string_ratio = string_count / len(row) if len(row) > 0 else 0
+            
+            # Check uniqueness
+            unique_ratio = row.nunique() / len(row) if len(row) > 0 else 0
+            
+            # Combined score
+            score = (non_null_ratio * 0.4) + (string_ratio * 0.4) + (unique_ratio * 0.2)
+            
+            if score > best_score:
+                best_score = score
+                best_row = i
+        
+        return best_row
+    
+    def _normalize_header(self, header: Any) -> str:
+        """
+        Normalize a single header value:
+        - Remove line breaks
+        - Trim whitespace
+        - Handle None/NaN
+        """
+        if pd.isna(header) or header is None:
+            return ""
+        
+        header_str = str(header)
+        # Remove line breaks and extra whitespace
+        header_str = header_str.replace('\n', ' ').replace('\r', ' ')
+        header_str = ' '.join(header_str.split())  # Normalize whitespace
+        return header_str.strip()
+    
+    def _normalize_headers(self, df: pd.DataFrame, header_row: int = 0) -> pd.DataFrame:
+        """
+        Normalize DataFrame headers:
+        - Use detected header row as column names
+        - Remove line breaks, trim spaces
+        - Handle multi-row headers by flattening
+        - Drop pre-header rows
+        
+        Returns:
+            DataFrame with normalized headers
+        """
+        if header_row == 0:
+            # Just normalize existing headers
+            new_columns = []
+            for i, col in enumerate(df.columns):
+                normalized = self._normalize_header(col)
+                if normalized == "" or normalized.startswith("Unnamed"):
+                    # Try to get from first data row if header is empty
+                    if len(df) > 0:
+                        first_val = df.iloc[0, i]
+                        if pd.notna(first_val) and not str(first_val).replace('.','').replace('-','').isdigit():
+                            normalized = self._normalize_header(first_val)
+                if normalized == "":
+                    normalized = f"Column_{i+1}"
+                new_columns.append(normalized)
+            df.columns = new_columns
+            return df
+        
+        # Use the detected header row as new column names
+        new_columns = []
+        header_values = df.iloc[header_row]
+        
+        for i, val in enumerate(header_values):
+            normalized = self._normalize_header(val)
+            if normalized == "":
+                normalized = f"Column_{i+1}"
+            new_columns.append(normalized)
+        
+        # Create new DataFrame without pre-header rows
+        new_df = df.iloc[header_row + 1:].copy()
+        new_df.columns = new_columns
+        new_df = new_df.reset_index(drop=True)
+        
+        return new_df
+    
+    def _classify_columns(self, df: pd.DataFrame) -> Dict[str, List[str]]:
+        """
+        Classify columns semantically:
+        - Entity columns: Text columns that identify who/what (names, IDs)
+        - Measure columns: Numeric columns for calculations/visualization
+        - Context columns: Categorical/grouping columns
+        - Date columns: Temporal data
+        
+        Returns:
+            Dictionary with classified column lists
+        """
+        classification = {
+            "entity_columns": [],      # Who/what the data is about (names, IDs)
+            "measure_columns": [],     # Numeric values for calculation
+            "context_columns": [],     # Categories, groups, labels
+            "date_columns": [],        # Date/time columns
+            "unknown_columns": []      # Cannot classify
+        }
+        
+        for col in df.columns:
+            col_data = df[col].dropna()
+            if len(col_data) == 0:
+                classification["unknown_columns"].append(col)
+                continue
+            
+            # Check if date column
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                classification["date_columns"].append(col)
+                continue
+            
+            # Check if numeric
+            if pd.api.types.is_numeric_dtype(df[col]):
+                classification["measure_columns"].append(col)
+                continue
+            
+            # For text columns, classify as entity or context
+            col_lower = col.lower()
+            unique_ratio = df[col].nunique() / len(df) if len(df) > 0 else 0
+            
+            # Entity indicators: high uniqueness, contains name/id keywords
+            entity_keywords = ['name', 'id', 'student', 'employee', 'person', 'customer', 'user', 'member']
+            is_entity = any(kw in col_lower for kw in entity_keywords) or unique_ratio > 0.5
+            
+            # Context indicators: low uniqueness, contains category keywords
+            context_keywords = ['type', 'category', 'group', 'class', 'grade', 'level', 'status', 'segment', 'division', 'section']
+            is_context = any(kw in col_lower for kw in context_keywords) or unique_ratio < 0.3
+            
+            if is_entity and not is_context:
+                classification["entity_columns"].append(col)
+            elif is_context:
+                classification["context_columns"].append(col)
+            else:
+                # Default: if unique ratio is high, it's entity; otherwise context
+                if unique_ratio > 0.5:
+                    classification["entity_columns"].append(col)
+                else:
+                    classification["context_columns"].append(col)
+        
+        return classification
+    
+    def _normalize_cell_value(self, value: Any) -> str:
+        """
+        Normalize a cell value for matching:
+        - Remove line breaks
+        - Trim whitespace
+        - Convert to string
+        """
+        if pd.isna(value) or value is None:
+            return ""
+        
+        val_str = str(value)
+        # Remove line breaks
+        val_str = val_str.replace('\n', ' ').replace('\r', ' ')
+        # Normalize whitespace
+        val_str = ' '.join(val_str.split())
+        return val_str.strip()
+    
+    def _token_match(self, search_term: str, value: str) -> bool:
+        """
+        Token-based matching for flexible entity/group matching.
+        Matches if search term tokens are found in value tokens.
+        
+        Example: "Chandra" matches "MYP 1 CHANDRA (Ms. Deepa)"
+        Example: "maths" matches "Mathematics"
+        """
+        if not search_term or not value:
+            return False
+        
+        # Normalize both
+        search_normalized = self._normalize_cell_value(search_term).lower()
+        value_normalized = self._normalize_cell_value(value).lower()
+        
+        # Direct contains check (either direction)
+        if search_normalized in value_normalized:
+            return True
+        if value_normalized in search_normalized:
+            return True
+        
+        # Partial match check (for cases like "maths" in "mathematics")
+        # Check if search term is a prefix/substring of any word in value
+        value_words = value_normalized.replace('(', ' ').replace(')', ' ').split()
+        for word in value_words:
+            if search_normalized in word or word in search_normalized:
+                return True
+            # Check prefix match (at least 3 chars)
+            if len(search_normalized) >= 3 and word.startswith(search_normalized[:3]):
+                return True
+            if len(word) >= 3 and search_normalized.startswith(word[:3]):
+                return True
+        
+        # Token-based check
+        search_tokens = set(search_normalized.split())
+        value_tokens = set(value_normalized.split())
+        
+        # Match if any search token is found in value tokens
+        for token in search_tokens:
+            if any(token in vt for vt in value_tokens):
+                return True
+        
+        return False
+    
+    def _extract_query_intent(self, query: str, column_classification: Dict) -> Dict:
+        """
+        Extract structured intent from user query.
+        
+        Returns:
+            Dictionary with intent, target entities, filters, measures, output type
+        """
+        query_lower = query.lower()
+        
+        intent = {
+            "operation": "unknown",
+            "target_entities": [],
+            "filters": [],
+            "measures": [],
+            "output_type": "data",
+            "aggregation": None
+        }
+        
+        # Detect operation type
+        if any(word in query_lower for word in ['chart', 'pie', 'bar', 'line', 'graph', 'plot', 'visualize']):
+            intent["operation"] = "visualization"
+            intent["output_type"] = "chart"
+            if 'pie' in query_lower:
+                intent["chart_type"] = "pie"
+            elif 'line' in query_lower:
+                intent["chart_type"] = "line"
+            else:
+                intent["chart_type"] = "bar"
+        elif any(word in query_lower for word in ['filter', 'where', 'only', 'show me']):
+            intent["operation"] = "filter"
+        elif any(word in query_lower for word in ['sort', 'order', 'rank']):
+            intent["operation"] = "sort"
+        elif any(word in query_lower for word in ['sum', 'total', 'average', 'mean', 'count', 'max', 'min']):
+            intent["operation"] = "aggregation"
+            if 'sum' in query_lower or 'total' in query_lower:
+                intent["aggregation"] = "sum"
+            elif 'average' in query_lower or 'mean' in query_lower:
+                intent["aggregation"] = "mean"
+            elif 'count' in query_lower:
+                intent["aggregation"] = "count"
+        elif any(word in query_lower for word in ['print', 'show', 'display', 'view', 'list']):
+            intent["operation"] = "display"
+            intent["output_type"] = "data"
+        else:
+            intent["operation"] = "transform"
+        
+        # Extract potential entity references from query
+        # Match against known entity columns
+        for entity_col in column_classification.get("entity_columns", []):
+            if entity_col.lower() in query_lower:
+                intent["target_entities"].append(entity_col)
+        
+        # Extract potential measure references
+        for measure_col in column_classification.get("measure_columns", []):
+            if measure_col.lower() in query_lower:
+                intent["measures"].append(measure_col)
+        
+        return intent
+
     def _generate_pandas_code(self, query: str, excel_structure: Dict) -> Dict:
         """
         Generate executable pandas code using LLM for any Excel operation.
@@ -276,57 +568,73 @@ class ExcelAgent:
         sample_data = excel_structure.get("sample_data", [])
         total_rows = excel_structure.get("total_rows", 0)
         
-        code_gen_prompt = f"""You are an expert Python/Pandas code generator for Excel operations.
+        # Get semantic column classification
+        entity_cols = excel_structure.get("entity_columns", [])
+        measure_cols = excel_structure.get("measure_columns", [])
+        context_cols = excel_structure.get("context_columns", [])
+        date_cols = excel_structure.get("date_columns", [])
+        
+        code_gen_prompt = f"""You are an Enterprise Excel Automation Agent - an expert Python/Pandas code generator.
 
 AVAILABLE DATA:
 - DataFrame variable: `df` (already loaded, do NOT reload)
-- Columns: {columns}
-- Numeric columns: {numeric_cols}
-- Text columns: {text_cols}
+- All Columns: {columns}
 - Total rows: {total_rows}
-- Sample data (STUDY THIS to understand actual data structure): {self._make_json_safe(sample_data[:5])}
+
+COLUMN CLASSIFICATION (Use this to understand the data):
+- Entity Columns (who/what): {entity_cols if entity_cols else 'None detected'}
+- Measure Columns (numeric values): {measure_cols if measure_cols else numeric_cols}
+- Context/Grouping Columns: {context_cols if context_cols else 'None detected'}
+- Date Columns: {date_cols if date_cols else 'None detected'}
+
+SAMPLE DATA (CRITICAL - Study this to understand actual values):
+{self._make_json_safe(sample_data[:5])}
 
 USER REQUEST: "{query}"
 
 YOUR TASK:
-Generate Python pandas code to fulfill the user's request.
+Generate Python pandas code to fulfill the user's request. You MUST handle ANY Excel structure.
 
-CRITICAL RULES:
-1. The DataFrame is already loaded as `df` - do NOT use pd.read_excel()
-2. Modify `df` in-place or reassign to `df` (e.g., df = df[df['col'] > 10])
-3. Use EXACT column names from the list above (case-sensitive)
-4. For column names with spaces, use df['Column Name'] syntax
-5. The final result MUST be stored in `df`
-6. Do NOT include print statements or file operations
-7. Keep code simple and focused on the operation
-8. matplotlib.pyplot is available as `plt` - you can use it for charts
+MANDATORY RULES:
+1. DataFrame is `df` - do NOT use pd.read_excel()
+2. Final result MUST be stored in `df`
+3. Use EXACT column names from the list (case-sensitive)
+4. matplotlib.pyplot is available as `plt` for charts
 
-DATA HANDLING (IMPORTANT):
-9. For numeric operations, ALWAYS convert columns first:
+DATA NORMALIZATION (ALWAYS DO THIS):
+5. Normalize cell values before matching:
+   - Remove line breaks: df['col'] = df['col'].astype(str).str.replace(r'\\n|\\r', ' ', regex=True)
+   - Strip whitespace: df['col'] = df['col'].str.strip()
+6. Convert to numeric when needed:
    df['col'] = pd.to_numeric(df['col'], errors='coerce')
-10. Drop NaN values when needed: df = df.dropna(subset=['col'])
-11. For "Unnamed:" columns, look at sample data row 0/1 for actual headers
-12. Handle mixed data types gracefully
+7. Drop NaN only when necessary: df = df.dropna(subset=['col'])
 
-FUZZY MATCHING (CRITICAL):
-13. Match user terms to actual data using case-insensitive contains:
-    - User says "Chandra" → find rows where column contains "CHANDRA" or "Chandra"
-    - User says "maths" → match "Mathematics", "Math", "MATH", etc.
-14. Use: df[df['col'].astype(str).str.contains('term', case=False, na=False)]
-15. NEVER ask for clarification - make reasonable assumptions based on sample data
-16. If multiple interpretations exist, pick the most likely one and proceed
+FUZZY/TOKEN MATCHING (CRITICAL):
+8. ALWAYS use case-insensitive partial matching:
+   df[df['col'].astype(str).str.contains('search_term', case=False, na=False)]
+9. User says "Chandra" → match "MYP 1 CHANDRA", "Chandra Section", etc.
+10. User says "maths" → match "Mathematics", "Math", "MATH", etc.
+11. For multi-word search, match ANY token:
+    df[df['col'].astype(str).str.contains('word1|word2', case=False, na=False)]
 
-VISUALIZATION RULES:
-17. For charts, matplotlib is pre-loaded as `plt`
-18. Save charts to file: plt.savefig('chart.png'); plt.close()
-19. For pie charts: plt.pie(values, labels=labels, autopct='%1.1f%%')
-20. Always close figures: plt.close() after saving
+VISUALIZATION:
+12. matplotlib is pre-loaded as `plt`
+13. For pie: plt.figure(figsize=(10,8)); plt.pie(values, labels=labels, autopct='%1.1f%%')
+14. For bar: plt.figure(figsize=(12,6)); plt.bar(x, y)
+15. ALWAYS: plt.tight_layout(); plt.savefig('chart.png', dpi=150, bbox_inches='tight'); plt.close()
+16. Filter data BEFORE plotting - don't plot all rows
+
+INTELLIGENT ASSUMPTIONS:
+17. NEVER ask for clarification - make the most reasonable assumption
+18. If user mentions a term, find it in ANY column using fuzzy match
+19. If ambiguous, pick the first/most logical match and proceed
+20. Study sample data to understand what values actually exist
 
 RESPONSE FORMAT (JSON only):
 {{
-    "pandas_code": "# Your pandas code here\\ndf['col'] = pd.to_numeric(df['col'], errors='coerce')\\ndf = df[df['col'] < 18540]",
+    "pandas_code": "# Normalize and process\\ndf['col'] = df['col'].astype(str).str.strip()\\n...",
     "operation_description": "Brief description of what the code does",
-    "columns_affected": ["list", "of", "affected", "columns"],
+    "columns_affected": ["list", "of", "columns"],
     "is_filter_operation": true/false,
     "is_read_only": true/false,
     "risk_level": "low/medium/high",
@@ -511,12 +819,17 @@ Return ONLY valid JSON, no markdown or explanation."""
             "columns_affected": code_response.get("columns_affected", [])
         }
         
-    def analyze_excel_structure(self, file_path: str, sheet_name: Optional[str] = None) -> Dict:
+    def analyze_excel_structure(self, file_path: str, sheet_name: Optional[str] = None, auto_detect_headers: bool = True) -> Dict:
         """
-        Analyzes Excel file structure
+        Analyzes Excel file structure with intelligent header detection and normalization.
+        
+        Args:
+            file_path: Path to Excel file
+            sheet_name: Optional specific sheet name
+            auto_detect_headers: If True, automatically detect and normalize headers
         
         Returns:
-            Dictionary containing sheets, columns, data types, and sample data
+            Dictionary containing sheets, columns, data types, sample data, and column classification
         """
         try:
             # Load Excel file
@@ -526,16 +839,42 @@ Return ONLY valid JSON, no markdown or explanation."""
             # Use first sheet if not specified
             target_sheet = sheet_name if sheet_name else sheets[0]
             
-            # Read the sheet
-            df = pd.read_excel(file_path, sheet_name=target_sheet)
+            # Read the sheet (header=None to get raw data first for header detection)
+            df_raw = pd.read_excel(file_path, sheet_name=target_sheet, header=None)
             
-            # Check for problematic column names (Unnamed columns indicate header issues)
-            unnamed_columns = [col for col in df.columns if str(col).startswith('Unnamed:')]
+            # Detect and normalize headers if enabled
+            header_row = 0
+            header_detection_info = None
+            
+            if auto_detect_headers and len(df_raw) > 0:
+                # Check if we have "Unnamed" style columns or need detection
+                df_test = pd.read_excel(file_path, sheet_name=target_sheet)
+                unnamed_count = sum(1 for col in df_test.columns if str(col).startswith('Unnamed:'))
+                
+                if unnamed_count > len(df_test.columns) * 0.3:  # More than 30% unnamed
+                    # Detect the true header row
+                    header_row = self._detect_header_row(df_raw)
+                    header_detection_info = f"Auto-detected header at row {header_row + 1}"
+                    
+                    # Normalize headers
+                    df = self._normalize_headers(df_raw, header_row)
+                else:
+                    # Use standard reading but normalize existing headers
+                    df = df_test
+                    df = self._normalize_headers(df, header_row=0)
+            else:
+                df = pd.read_excel(file_path, sheet_name=target_sheet)
+            
+            # Check for any remaining problematic column names
+            unnamed_columns = [col for col in df.columns if str(col).startswith('Unnamed:') or str(col).startswith('Column_')]
             has_header_issues = len(unnamed_columns) > 0
             header_warning = None
             
             if has_header_issues:
-                header_warning = f"⚠️  Detected {len(unnamed_columns)} unnamed columns. This usually indicates the Excel file has merged cells, multi-row headers, or missing column names. Consider cleaning the file headers."
+                header_warning = f"⚠️  {len(unnamed_columns)} columns could not be auto-named. Check the source file structure."
+            
+            # Classify columns semantically
+            column_classification = self._classify_columns(df)
             
             # Analyze structure
             analysis = {
@@ -546,13 +885,19 @@ Return ONLY valid JSON, no markdown or explanation."""
                 "total_columns": len(df.columns),
                 "columns": list(df.columns),
                 "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "sample_data": self._make_json_safe(df.head(3).to_dict('records')),
+                "sample_data": self._make_json_safe(df.head(5).to_dict('records')),
                 "null_counts": self._make_json_safe(df.isnull().sum().to_dict()),
                 "numeric_columns": df.select_dtypes(include=['number']).columns.tolist(),
                 "text_columns": df.select_dtypes(include=['object']).columns.tolist(),
                 "has_header_issues": has_header_issues,
                 "unnamed_columns_count": len(unnamed_columns),
-                "header_warning": header_warning
+                "header_warning": header_warning,
+                "header_detection_info": header_detection_info,
+                "column_classification": column_classification,
+                "entity_columns": column_classification.get("entity_columns", []),
+                "measure_columns": column_classification.get("measure_columns", []),
+                "context_columns": column_classification.get("context_columns", []),
+                "date_columns": column_classification.get("date_columns", [])
             }
             
             return analysis
