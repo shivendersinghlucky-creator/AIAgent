@@ -246,6 +246,218 @@ class ExcelAgent:
         self.system_prompt = SYSTEM_PROMPT
         self.conversation_history = []
         self.change_log = []  # Track all changes for audit
+    
+    def _make_json_safe(self, data: Any) -> Any:
+        """Convert Timestamps and other non-JSON-serializable types to strings"""
+        if isinstance(data, dict):
+            return {k: self._make_json_safe(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._make_json_safe(item) for item in data]
+        elif isinstance(data, pd.Timestamp):
+            return data.strftime('%Y-%m-%d %H:%M:%S')
+        elif hasattr(data, 'isoformat'):  # datetime objects
+            return data.isoformat()
+        elif pd.isna(data):
+            return None
+        else:
+            return data
+    
+    def _generate_pandas_code(self, query: str, excel_structure: Dict) -> Dict:
+        """
+        Generate executable pandas code using LLM for any Excel operation.
+        This is the core of the intelligent agent - LLM writes the actual code.
+        
+        Returns:
+            Dictionary with generated code, explanation, and metadata
+        """
+        columns = excel_structure.get("columns", [])
+        numeric_cols = excel_structure.get("numeric_columns", [])
+        text_cols = excel_structure.get("text_columns", [])
+        sample_data = excel_structure.get("sample_data", [])
+        total_rows = excel_structure.get("total_rows", 0)
+        
+        code_gen_prompt = f"""You are an expert Python/Pandas code generator for Excel operations.
+
+AVAILABLE DATA:
+- DataFrame variable: `df` (already loaded, do NOT reload)
+- Columns: {columns}
+- Numeric columns: {numeric_cols}
+- Text columns: {text_cols}
+- Total rows: {total_rows}
+- Sample data: {self._make_json_safe(sample_data[:3])}
+
+USER REQUEST: "{query}"
+
+YOUR TASK:
+Generate Python pandas code to fulfill the user's request.
+
+CRITICAL RULES:
+1. The DataFrame is already loaded as `df` - do NOT use pd.read_excel()
+2. Modify `df` in-place or reassign to `df` (e.g., df = df[df['col'] > 10])
+3. Use EXACT column names from the list above (case-sensitive)
+4. For column names with spaces, use df['Column Name'] syntax
+5. The final result MUST be stored in `df`
+6. Do NOT include print statements, imports, or file operations
+7. Keep code simple and focused on the operation
+8. Handle potential errors (e.g., check if column exists)
+
+RESPONSE FORMAT (JSON only):
+{{
+    "pandas_code": "# Your pandas code here\\ndf = df[df['Gross Sales'] < 18540]",
+    "operation_description": "Brief description of what the code does",
+    "columns_affected": ["list", "of", "affected", "columns"],
+    "is_filter_operation": true/false,
+    "is_read_only": true/false,
+    "risk_level": "low/medium/high",
+    "expected_row_change": "same/increase/decrease/unknown"
+}}
+
+Return ONLY valid JSON, no markdown or explanation."""
+
+        messages = [
+            {"role": "system", "content": "You are a pandas code generator. Return ONLY valid JSON with executable Python code."},
+            {"role": "user", "content": code_gen_prompt}
+        ]
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.1,
+            max_tokens=1000
+        )
+        
+        return self._extract_json_from_response(response)
+    
+    def _execute_generated_code(self, df: pd.DataFrame, code: str, query: str) -> tuple:
+        """
+        Safely execute LLM-generated pandas code.
+        
+        Returns:
+            Tuple of (modified_df, success_bool, error_message)
+        """
+        # Create a safe execution environment
+        safe_globals = {
+            'pd': pd,
+            'np': __import__('numpy'),
+            're': re,
+            'df': df.copy(),  # Work on a copy for safety
+        }
+        
+        # Add common pandas functions
+        safe_globals['DataFrame'] = pd.DataFrame
+        safe_globals['Series'] = pd.Series
+        
+        try:
+            # Clean the code
+            clean_code = code.strip()
+            
+            # Remove any dangerous operations
+            dangerous_patterns = [
+                'import ', 'exec(', 'eval(', 'open(', 'os.', 'subprocess',
+                'shutil', '__', 'globals(', 'locals(', 'compile(',
+                'read_excel', 'to_excel', 'read_csv', 'to_csv'
+            ]
+            
+            for pattern in dangerous_patterns:
+                if pattern in clean_code.lower():
+                    return df, False, f"Security: '{pattern}' is not allowed in generated code"
+            
+            # Execute the code
+            exec(clean_code, safe_globals)
+            
+            # Get the modified DataFrame
+            result_df = safe_globals.get('df', df)
+            
+            if not isinstance(result_df, pd.DataFrame):
+                return df, False, "Code did not produce a valid DataFrame"
+            
+            return result_df, True, None
+            
+        except Exception as e:
+            return df, False, f"Code execution error: {str(e)}"
+    
+    def process_query_with_code_generation(self, query: str, file_path: str, 
+                                            sheet_name: Optional[str] = None) -> Dict:
+        """
+        Process user query using LLM code generation approach.
+        This is the intelligent agent that lets LLM handle any Excel operation.
+        
+        Returns:
+            Dictionary with execution results
+        """
+        # Step 1: Analyze Excel structure
+        excel_structure = self.analyze_excel_structure(file_path, sheet_name)
+        if "error" in excel_structure:
+            return {"status": "failed", "error": excel_structure["error"]}
+        
+        target_sheet = excel_structure.get("analyzed_sheet", "Sheet1")
+        
+        # Step 2: Generate pandas code using LLM
+        print(f"\n   🤖 Generating pandas code for: '{query}'")
+        code_response = self._generate_pandas_code(query, excel_structure)
+        
+        if not code_response or "pandas_code" not in code_response:
+            return {"status": "failed", "error": "Failed to generate pandas code"}
+        
+        pandas_code = code_response.get("pandas_code", "")
+        operation_desc = code_response.get("operation_description", "Execute operation")
+        is_read_only = code_response.get("is_read_only", False)
+        risk_level = code_response.get("risk_level", "medium")
+        
+        print(f"   📝 Generated Code:\n      {pandas_code.replace(chr(10), chr(10) + '      ')}")
+        print(f"   📋 Operation: {operation_desc}")
+        print(f"   ⚠️  Risk Level: {risk_level.upper()}")
+        
+        # Step 3: Load DataFrame
+        df = pd.read_excel(file_path, sheet_name=target_sheet)
+        original_row_count = len(df)
+        
+        # Step 4: Execute the generated code
+        print(f"\n   ⚙️  Executing generated code...")
+        result_df, success, error = self._execute_generated_code(df, pandas_code, query)
+        
+        if not success:
+            return {"status": "failed", "error": error}
+        
+        new_row_count = len(result_df)
+        
+        # Step 5: Save results (if not read-only)
+        if is_read_only:
+            return {
+                "status": "success",
+                "message": operation_desc,
+                "rows_affected": new_row_count,
+                "output_file": None,
+                "is_read_only": True,
+                "data_preview": self._make_json_safe(result_df.head(10).to_dict('records')),
+                "generated_code": pandas_code
+            }
+        
+        # Generate output filename
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        dir_name = os.path.dirname(file_path)
+        counter = 1
+        while True:
+            output_path = os.path.join(dir_name, f"{base_name}_modified_{counter}.xlsx")
+            if not os.path.exists(output_path):
+                break
+            counter += 1
+        
+        # Save with all sheets preserved
+        self._save_with_all_sheets(file_path, result_df, target_sheet, output_path)
+        
+        return {
+            "status": "success",
+            "message": operation_desc,
+            "rows_before": original_row_count,
+            "rows_after": new_row_count,
+            "rows_affected": abs(original_row_count - new_row_count) if original_row_count != new_row_count else new_row_count,
+            "output_file": output_path,
+            "is_read_only": False,
+            "data_preview": self._make_json_safe(result_df.head(10).to_dict('records')),
+            "generated_code": pandas_code,
+            "columns_affected": code_response.get("columns_affected", [])
+        }
         
     def analyze_excel_structure(self, file_path: str, sheet_name: Optional[str] = None) -> Dict:
         """
@@ -282,8 +494,8 @@ class ExcelAgent:
                 "total_columns": len(df.columns),
                 "columns": list(df.columns),
                 "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "sample_data": df.head(3).to_dict('records'),
-                "null_counts": df.isnull().sum().to_dict(),
+                "sample_data": self._make_json_safe(df.head(3).to_dict('records')),
+                "null_counts": self._make_json_safe(df.isnull().sum().to_dict()),
                 "numeric_columns": df.select_dtypes(include=['number']).columns.tolist(),
                 "text_columns": df.select_dtypes(include=['object']).columns.tolist(),
                 "has_header_issues": has_header_issues,
@@ -1804,7 +2016,7 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
                 "error": f"Chart creation failed: {str(e)}"
             }
     
-    def process_query(self, file_path: str, query: str, output_path: Optional[str] = None, sheet_name: Optional[str] = None) -> Dict:
+    def process_query(self, file_path: str, query: str, output_path: Optional[str] = None, sheet_name: Optional[str] = None, use_code_generation: bool = True) -> Dict:
         """
         Main entry point: Process user query on Excel file
         
@@ -1815,11 +2027,138 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
             query: User's natural language query
             output_path: Optional path for output file
             sheet_name: Optional specific sheet to work with
+            use_code_generation: If True, use LLM code generation (recommended)
         """
         print("\n" + "="*60)
         print("🤖 EXCEL AGENT - PROCESSING REQUEST")
         print("="*60)
         
+        # Use code generation approach for intelligent execution
+        if use_code_generation:
+            return self._process_with_code_generation(file_path, query, output_path, sheet_name)
+        
+        # Legacy approach (kept for backward compatibility)
+        return self._process_with_pattern_matching(file_path, query, output_path, sheet_name)
+    
+    def _process_with_code_generation(self, file_path: str, query: str, output_path: Optional[str] = None, sheet_name: Optional[str] = None) -> Dict:
+        """
+        Process query using LLM code generation - the intelligent approach.
+        LLM generates pandas code, we execute it safely.
+        """
+        # STEP 1: Analyze Excel Structure
+        print("\n📊 STEP 1: Analyzing Excel Structure...")
+        excel_structure = self.analyze_excel_structure(file_path, sheet_name=sheet_name)
+        
+        if "error" in excel_structure:
+            return {"status": "failed", "error": excel_structure["error"]}
+        
+        target_sheet = excel_structure.get("analyzed_sheet", "Sheet1")
+        columns_display = ', '.join([str(c) for c in excel_structure.get('columns', [])])
+        print(f"   ✓ Found {excel_structure['total_columns']} columns: {columns_display}")
+        print(f"   ✓ Total rows: {excel_structure['total_rows']}")
+        print(f"   ✓ Sheet: {target_sheet}")
+        
+        # STEP 2: Generate pandas code using LLM
+        print(f"\n🧠 STEP 2: AI Code Generation...")
+        print(f"   Query: '{query}'")
+        
+        code_response = self._generate_pandas_code(query, excel_structure)
+        
+        if not code_response or "pandas_code" not in code_response:
+            print("   ❌ Failed to generate code, falling back to pattern matching...")
+            return self._process_with_pattern_matching(file_path, query, output_path, sheet_name)
+        
+        pandas_code = code_response.get("pandas_code", "")
+        operation_desc = code_response.get("operation_description", "Execute operation")
+        is_read_only = code_response.get("is_read_only", False)
+        risk_level = code_response.get("risk_level", "medium")
+        columns_affected = code_response.get("columns_affected", [])
+        
+        print(f"\n   💻 Generated Pandas Code:")
+        for line in pandas_code.split('\n'):
+            print(f"      {line}")
+        print(f"\n   📋 Operation: {operation_desc}")
+        print(f"   ⚠️  Risk Level: {risk_level.upper()}")
+        print(f"   📊 Columns Affected: {', '.join(columns_affected) if columns_affected else 'All'}")
+        
+        # STEP 3: Load DataFrame
+        print(f"\n⚙️  STEP 3: Executing Generated Code...")
+        df = pd.read_excel(file_path, sheet_name=target_sheet)
+        original_row_count = len(df)
+        
+        # STEP 4: Execute the generated code
+        result_df, success, error = self._execute_generated_code(df, pandas_code, query)
+        
+        if not success:
+            print(f"   ❌ Code execution failed: {error}")
+            print("   🔄 Falling back to pattern matching approach...")
+            return self._process_with_pattern_matching(file_path, query, output_path, sheet_name)
+        
+        new_row_count = len(result_df)
+        print(f"   ✅ Code executed successfully!")
+        print(f"   📊 Rows: {original_row_count} → {new_row_count}")
+        
+        # STEP 5: Handle results
+        if is_read_only:
+            print(f"\n📊 STEP 4: Displaying Results (Read-Only)...")
+            return {
+                "status": "success",
+                "message": operation_desc,
+                "rows_affected": new_row_count,
+                "output_file": None,
+                "is_read_only": True,
+                "data_preview": self._make_json_safe(result_df.head(10).to_dict('records')),
+                "generated_code": pandas_code
+            }
+        
+        # Generate output filename
+        print(f"\n💾 STEP 4: Saving Results...")
+        if not output_path:
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            dir_name = os.path.dirname(file_path)
+            counter = 1
+            while True:
+                output_path = os.path.join(dir_name, f"{base_name}_modified_{counter}.xlsx") if dir_name else f"{base_name}_modified_{counter}.xlsx"
+                if not os.path.exists(output_path):
+                    break
+                counter += 1
+        
+        # Save with all sheets preserved
+        self._save_with_all_sheets(file_path, result_df, target_sheet, output_path)
+        
+        print(f"   ✅ SUCCESS!")
+        print(f"   ✓ Operation: {operation_desc}")
+        print(f"   ✓ Rows: {original_row_count} → {new_row_count}")
+        print(f"   ✓ Output saved to: {output_path}")
+        
+        # Log the change
+        self.change_log.append({
+            "timestamp": pd.Timestamp.now().isoformat(),
+            "file": file_path,
+            "query": query,
+            "operation": operation_desc,
+            "output": output_path,
+            "generated_code": pandas_code
+        })
+        
+        return {
+            "status": "success",
+            "message": operation_desc,
+            "rows_before": original_row_count,
+            "rows_after": new_row_count,
+            "rows_affected": new_row_count,
+            "output_file": output_path,
+            "is_read_only": False,
+            "changes": [operation_desc, f"Rows: {original_row_count} → {new_row_count}"],
+            "data_preview": self._make_json_safe(result_df.head(10).to_dict('records')),
+            "generated_code": pandas_code
+        }
+    
+    def _process_with_pattern_matching(self, file_path: str, query: str, output_path: Optional[str] = None, sheet_name: Optional[str] = None) -> Dict:
+        """
+        Legacy approach: Process query using pattern matching (original implementation)
+        Kept for backward compatibility and as fallback.
+        """
         # Set output path
         if not output_path:
             base, ext = os.path.splitext(file_path)
