@@ -284,7 +284,7 @@ AVAILABLE DATA:
 - Numeric columns: {numeric_cols}
 - Text columns: {text_cols}
 - Total rows: {total_rows}
-- Sample data: {self._make_json_safe(sample_data[:3])}
+- Sample data (STUDY THIS to understand actual data structure): {self._make_json_safe(sample_data[:5])}
 
 USER REQUEST: "{query}"
 
@@ -297,13 +297,34 @@ CRITICAL RULES:
 3. Use EXACT column names from the list above (case-sensitive)
 4. For column names with spaces, use df['Column Name'] syntax
 5. The final result MUST be stored in `df`
-6. Do NOT include print statements, imports, or file operations
+6. Do NOT include print statements or file operations
 7. Keep code simple and focused on the operation
-8. Handle potential errors (e.g., check if column exists)
+8. matplotlib.pyplot is available as `plt` - you can use it for charts
+
+DATA HANDLING (IMPORTANT):
+9. For numeric operations, ALWAYS convert columns first:
+   df['col'] = pd.to_numeric(df['col'], errors='coerce')
+10. Drop NaN values when needed: df = df.dropna(subset=['col'])
+11. For "Unnamed:" columns, look at sample data row 0/1 for actual headers
+12. Handle mixed data types gracefully
+
+FUZZY MATCHING (CRITICAL):
+13. Match user terms to actual data using case-insensitive contains:
+    - User says "Chandra" → find rows where column contains "CHANDRA" or "Chandra"
+    - User says "maths" → match "Mathematics", "Math", "MATH", etc.
+14. Use: df[df['col'].astype(str).str.contains('term', case=False, na=False)]
+15. NEVER ask for clarification - make reasonable assumptions based on sample data
+16. If multiple interpretations exist, pick the most likely one and proceed
+
+VISUALIZATION RULES:
+17. For charts, matplotlib is pre-loaded as `plt`
+18. Save charts to file: plt.savefig('chart.png'); plt.close()
+19. For pie charts: plt.pie(values, labels=labels, autopct='%1.1f%%')
+20. Always close figures: plt.close() after saving
 
 RESPONSE FORMAT (JSON only):
 {{
-    "pandas_code": "# Your pandas code here\\ndf = df[df['Gross Sales'] < 18540]",
+    "pandas_code": "# Your pandas code here\\ndf['col'] = pd.to_numeric(df['col'], errors='coerce')\\ndf = df[df['col'] < 18540]",
     "operation_description": "Brief description of what the code does",
     "columns_affected": ["list", "of", "affected", "columns"],
     "is_filter_operation": true/false,
@@ -335,27 +356,58 @@ Return ONLY valid JSON, no markdown or explanation."""
         Returns:
             Tuple of (modified_df, success_bool, error_message)
         """
-        # Create a safe execution environment
+        # Import safe visualization libraries
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend for server use
+            import matplotlib.pyplot as plt
+            has_matplotlib = True
+        except ImportError:
+            has_matplotlib = False
+            plt = None
+        
+        # Create a safe execution environment with pre-loaded safe libraries
         safe_globals = {
             'pd': pd,
             'np': __import__('numpy'),
             're': re,
             'df': df.copy(),  # Work on a copy for safety
+            'datetime': __import__('datetime'),
         }
+        
+        # Add matplotlib if available (for visualizations)
+        if has_matplotlib:
+            safe_globals['plt'] = plt
+            safe_globals['matplotlib'] = matplotlib
         
         # Add common pandas functions
         safe_globals['DataFrame'] = pd.DataFrame
         safe_globals['Series'] = pd.Series
         
         try:
-            # Clean the code
+            # Clean the code - remove import statements (we pre-load safe ones)
             clean_code = code.strip()
+            
+            # Remove import lines since we pre-load safe libraries
+            code_lines = clean_code.split('\n')
+            filtered_lines = []
+            for line in code_lines:
+                line_stripped = line.strip().lower()
+                # Allow matplotlib/numpy imports by skipping them (already loaded)
+                if line_stripped.startswith('import matplotlib') or \
+                   line_stripped.startswith('import numpy') or \
+                   line_stripped.startswith('from matplotlib') or \
+                   line_stripped.startswith('import datetime'):
+                    continue  # Skip - already pre-loaded
+                filtered_lines.append(line)
+            clean_code = '\n'.join(filtered_lines)
             
             # Remove any dangerous operations
             dangerous_patterns = [
-                'import ', 'exec(', 'eval(', 'open(', 'os.', 'subprocess',
+                'exec(', 'eval(', 'open(', 'os.', 'subprocess',
                 'shutil', '__', 'globals(', 'locals(', 'compile(',
-                'read_excel', 'to_excel', 'read_csv', 'to_csv'
+                'read_excel', 'to_excel', 'read_csv', 'to_csv',
+                'import os', 'import sys', 'import subprocess'
             ]
             
             for pattern in dangerous_patterns:
@@ -1983,9 +2035,10 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
                                max_row=max_row)
                 chart.set_categories(cats)
             
-            # Set chart labels
-            chart.x_axis.title = category_col if category_col else "Categories"
-            chart.y_axis.title = "Values"
+            # Set chart labels - only for charts that support axes (not PieChart)
+            if hasattr(chart, 'x_axis') and hasattr(chart, 'y_axis'):
+                chart.x_axis.title = category_col if category_col else "Categories"
+                chart.y_axis.title = "Values"
             
             # Style
             chart.style = 10
