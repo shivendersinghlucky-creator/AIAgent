@@ -248,15 +248,19 @@ class ExcelAgent:
         self.change_log = []  # Track all changes for audit
     
     def _make_json_safe(self, data: Any) -> Any:
-        """Convert Timestamps and other non-JSON-serializable types to strings"""
+        """Convert Timestamps, non-string keys, and other non-JSON-serializable types to strings"""
         if isinstance(data, dict):
-            return {k: self._make_json_safe(v) for k, v in data.items()}
+            # Ensure all keys are strings (fixes to_dict warning with non-unique columns)
+            return {str(k): self._make_json_safe(v) for k, v in data.items()}
         elif isinstance(data, list):
             return [self._make_json_safe(item) for item in data]
         elif isinstance(data, pd.Timestamp):
             return data.strftime('%Y-%m-%d %H:%M:%S')
         elif hasattr(data, 'isoformat'):  # datetime objects
             return data.isoformat()
+        elif isinstance(data, pd.Series):
+            # Handle Series that might sneak through
+            return self._make_json_safe(data.tolist())
         elif pd.isna(data):
             return None
         else:
@@ -318,6 +322,68 @@ class ExcelAgent:
         
         return best_row
     
+    def _make_columns_unique(self, columns: List[Any]) -> List[str]:
+        """
+        Make column names unique by adding suffix _2, _3, etc. for duplicates.
+        This is a GENERIC solution that works for ANY Excel file.
+        
+        Args:
+            columns: List of column names (may have duplicates)
+            
+        Returns:
+            List of unique column names
+        """
+        seen = {}
+        unique_columns = []
+        
+        for col in columns:
+            col_str = str(col).strip() if col is not None else "Column"
+            if col_str == "" or col_str.lower() == "nan":
+                col_str = "Column"
+            
+            if col_str in seen:
+                seen[col_str] += 1
+                unique_col = f"{col_str}_{seen[col_str]}"
+            else:
+                seen[col_str] = 1
+                unique_col = col_str
+            
+            unique_columns.append(unique_col)
+        
+        return unique_columns
+    
+    def _get_comprehensive_sample(self, df: pd.DataFrame, n_samples: int = 3) -> List[Dict]:
+        """
+        Get comprehensive sample data from beginning, middle, and end of DataFrame.
+        This captures all regions of the sheet for better LLM understanding.
+        
+        Args:
+            df: DataFrame to sample
+            n_samples: Number of samples from each region
+            
+        Returns:
+            List of sample records
+        """
+        samples = []
+        total_rows = len(df)
+        
+        if total_rows == 0:
+            return samples
+        
+        # Beginning samples
+        samples.extend(df.head(n_samples).to_dict('records'))
+        
+        # Middle samples (if enough rows)
+        if total_rows > n_samples * 3:
+            mid_start = total_rows // 2 - n_samples // 2
+            samples.extend(df.iloc[mid_start:mid_start + n_samples].to_dict('records'))
+        
+        # End samples (if enough rows and not already included)
+        if total_rows > n_samples * 2:
+            samples.extend(df.tail(n_samples).to_dict('records'))
+        
+        return samples
+    
     def _normalize_header(self, header: Any) -> str:
         """
         Normalize a single header value:
@@ -351,9 +417,10 @@ class ExcelAgent:
         - Remove line breaks, trim spaces
         - Handle multi-row headers by flattening
         - Drop pre-header rows
+        - Make column names UNIQUE (auto-suffix duplicates)
         
         Returns:
-            DataFrame with normalized headers
+            DataFrame with normalized and UNIQUE headers
         """
         if header_row == 0:
             # Just normalize existing headers
@@ -376,7 +443,10 @@ class ExcelAgent:
                 if normalized == "":
                     normalized = f"Column_{i+1}"
                 new_columns.append(normalized)
-            df.columns = new_columns
+            
+            # Make columns unique by adding suffix for duplicates
+            unique_columns = self._make_columns_unique(new_columns)
+            df.columns = unique_columns
             return df
         
         # Use the detected header row as new column names
@@ -396,9 +466,12 @@ class ExcelAgent:
                 normalized = f"Column_{i+1}"
             new_columns.append(normalized)
         
+        # Make columns unique by adding suffix for duplicates
+        unique_columns = self._make_columns_unique(new_columns)
+        
         # Create new DataFrame without pre-header rows
         new_df = df.iloc[header_row + 1:].copy()
-        new_df.columns = new_columns
+        new_df.columns = unique_columns
         new_df = new_df.reset_index(drop=True)
         
         return new_df
@@ -920,6 +993,10 @@ Return ONLY valid JSON, no markdown or explanation."""
             # Classify columns semantically
             column_classification = self._classify_columns(df)
             
+            # Get comprehensive sample data (beginning, middle, end of sheet)
+            # This helps LLM understand all regions of the data
+            comprehensive_samples = self._get_comprehensive_sample(df, n_samples=3)
+            
             # Analyze structure
             analysis = {
                 "file_name": os.path.basename(file_path),
@@ -928,11 +1005,11 @@ Return ONLY valid JSON, no markdown or explanation."""
                 "total_rows": len(df),
                 "total_columns": len(df.columns),
                 "columns": list(df.columns),
-                "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "sample_data": self._make_json_safe(df.head(5).to_dict('records')),
-                "null_counts": self._make_json_safe(df.isnull().sum().to_dict()),
-                "numeric_columns": df.select_dtypes(include=['number']).columns.tolist(),
-                "text_columns": df.select_dtypes(include=['object']).columns.tolist(),
+                "data_types": {str(col): str(dtype) for col, dtype in df.dtypes.items()},
+                "sample_data": self._make_json_safe(comprehensive_samples),
+                "null_counts": self._make_json_safe({str(k): v for k, v in df.isnull().sum().to_dict().items()}),
+                "numeric_columns": [str(c) for c in df.select_dtypes(include=['number']).columns.tolist()],
+                "text_columns": [str(c) for c in df.select_dtypes(include=['object']).columns.tolist()],
                 "has_header_issues": has_header_issues,
                 "unnamed_columns_count": len(unnamed_columns),
                 "header_warning": header_warning,
@@ -2507,6 +2584,13 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         code_response = self._generate_pandas_code(query, excel_structure)
         
         if not code_response or "pandas_code" not in code_response:
+            # Log the actual error for debugging
+            if code_response and "error" in code_response:
+                print(f"   ⚠️  Code generation error: {code_response.get('error', 'Unknown error')}")
+            elif code_response:
+                print(f"   ⚠️  Missing 'pandas_code' in response. Keys: {list(code_response.keys())}")
+            else:
+                print(f"   ⚠️  Empty response from LLM")
             print("   ❌ Failed to generate code, falling back to pattern matching...")
             return self._process_with_pattern_matching(file_path, query, output_path, sheet_name)
         
@@ -2523,9 +2607,11 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         print(f"   ⚠️  Risk Level: {risk_level.upper()}")
         print(f"   📊 Columns Affected: {', '.join(columns_affected) if columns_affected else 'All'}")
         
-        # STEP 3: Load DataFrame
+        # STEP 3: Load DataFrame with normalized headers (same as analyze_excel_structure)
         print(f"\n⚙️  STEP 3: Executing Generated Code...")
         df = pd.read_excel(file_path, sheet_name=target_sheet)
+        # Apply the same header normalization to ensure column names match what LLM expects
+        df = self._normalize_headers(df, header_row=0)
         original_row_count = len(df)
         
         # STEP 4: Execute the generated code
