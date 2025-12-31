@@ -716,7 +716,8 @@ MANDATORY RULES:
 1. DataFrame is `df` - do NOT use pd.read_excel()
 2. Final result MUST be stored in `df`
 3. Use EXACT column names from the list (case-sensitive)
-4. matplotlib.pyplot is available as `plt` for charts
+4. DO NOT use any import statements - pd, plt, np, re, datetime are PRE-LOADED
+5. matplotlib.pyplot is available as `plt` for charts
 
 DATA NORMALIZATION (ALWAYS DO THIS):
 5. Normalize cell values before matching:
@@ -741,11 +742,13 @@ VISUALIZATION:
 15. ALWAYS: plt.tight_layout(); plt.savefig('chart.png', dpi=150, bbox_inches='tight'); plt.close()
 16. Filter data BEFORE plotting - don't plot all rows
 
-INTELLIGENT ASSUMPTIONS:
-17. NEVER ask for clarification - make the most reasonable assumption
+INTELLIGENT ASSUMPTIONS (CRITICAL - NO CLARIFICATION):
+17. NEVER ask for clarification - ALWAYS make the most reasonable assumption and execute
 18. If user mentions a term, find it in ANY column using fuzzy match
-19. If ambiguous, pick the first/most logical match and proceed
+19. If ambiguous, pick the first/most logical match and proceed - DO NOT ask user
 20. Study sample data to understand what values actually exist
+21. For charts: use averages/sums/counts as appropriate without asking
+22. ALWAYS generate executable code - never return questions or clarification requests
 
 RESPONSE FORMAT (JSON only):
 {{
@@ -810,20 +813,18 @@ Return ONLY valid JSON, no markdown or explanation."""
         safe_globals['Series'] = pd.Series
         
         try:
-            # Clean the code - remove import statements (we pre-load safe ones)
+            # Clean the code - remove ALL import statements (we pre-load safe ones)
             clean_code = code.strip()
             
-            # Remove import lines since we pre-load safe libraries
+            # Remove ALL import lines since we pre-load safe libraries
+            # This is a GENERIC fix that works for any LLM-generated code
             code_lines = clean_code.split('\n')
             filtered_lines = []
             for line in code_lines:
                 line_stripped = line.strip().lower()
-                # Allow matplotlib/numpy imports by skipping them (already loaded)
-                if line_stripped.startswith('import matplotlib') or \
-                   line_stripped.startswith('import numpy') or \
-                   line_stripped.startswith('from matplotlib') or \
-                   line_stripped.startswith('import datetime'):
-                    continue  # Skip - already pre-loaded
+                # Skip ANY import statement - all safe libraries are pre-loaded
+                if line_stripped.startswith('import ') or line_stripped.startswith('from '):
+                    continue  # Skip - libraries are pre-loaded in safe_globals
                 filtered_lines.append(line)
             clean_code = '\n'.join(filtered_lines)
             
@@ -885,8 +886,9 @@ Return ONLY valid JSON, no markdown or explanation."""
         print(f"   📋 Operation: {operation_desc}")
         print(f"   ⚠️  Risk Level: {risk_level.upper()}")
         
-        # Step 3: Load DataFrame
+        # Step 3: Load DataFrame with normalized headers (same as analyze_excel_structure)
         df = pd.read_excel(file_path, sheet_name=target_sheet)
+        df = self._normalize_headers(df, header_row=0)  # Ensure column names match analysis
         original_row_count = len(df)
         
         # Step 4: Execute the generated code
@@ -1293,10 +1295,12 @@ CRITICAL RULES - MUST FOLLOW:
    • MEDIUM RISK: Formatting, renaming, filtering
    • HIGH RISK: Deleting columns, removing rows, cross-sheet operations
 
-4. AMBIGUITY HANDLING
-   • If multiple interpretations exist, list in alternative_interpretations
-   • If critical info missing, set clarification_needed
-   • If columns don't exist, suggest creating them
+4. AMBIGUITY HANDLING - NEVER ASK FOR CLARIFICATION
+   • If multiple interpretations exist, pick the MOST LOGICAL one and proceed
+   • NEVER set clarification_needed - always make a reasonable assumption
+   • If columns don't exist, use fuzzy matching to find similar columns
+   • ALWAYS set is_ambiguous=false and clarification_needed=null
+   • For charts: use averages for numeric data by default
 
 5. OUTPUT FORMAT
    • Return ONLY the JSON object
@@ -2728,20 +2732,15 @@ Be helpful, solution-oriented, and empathetic. Return ONLY the JSON.
         print(f"   ✓ Source Columns: {', '.join(parsed_query.get('source_columns', []))}")
         print(f"   ✓ Execution Confidence: {parsed_query.get('execution_confidence', 'N/A').upper()}")
         
-        # STEP 3: Check for clarification needed
-        if parsed_query.get("is_ambiguous") or parsed_query.get("clarification_needed"):
-            alternatives = parsed_query.get("alternative_interpretations", [])
-            if alternatives:
-                print(f"\n   🤔 Alternative Interpretations Detected:")
-                for i, alt in enumerate(alternatives, 1):
-                    print(f"      {i}. {alt}")
-            
-            return {
-                "status": "clarification_needed",
-                "question": parsed_query.get("clarification_needed"),
-                "alternatives": alternatives,
-                "parsed_info": parsed_query
-            }
+        # STEP 3: Log alternative interpretations but PROCEED with execution (no clarification)
+        alternatives = parsed_query.get("alternative_interpretations", [])
+        if alternatives:
+            print(f"\n   💡 Alternative Interpretations (proceeding with primary):")
+            for i, alt in enumerate(alternatives, 1):
+                print(f"      {i}. {alt}")
+        
+        # NOTE: We NO LONGER ask for clarification - agent makes intelligent assumptions
+        # The old clarification logic has been removed to ensure autonomous execution
         
         # STEP 4: Create Decision Plan
         print(f"\n📋 STEP 3: Creating Enterprise Decision Plan...")
