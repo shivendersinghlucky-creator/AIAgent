@@ -1,0 +1,449 @@
+
+D:\AgentExcel\AIAgent>python excel_agent.py
+
+======================================================================
+🏢 ENTERPRISE EXCEL AUTOMATION AI AGENT - INTERACTIVE MODE
+======================================================================
+
+Welcome! I'm your Enterprise Excel Automation Agent.
+I can help you with professional Excel operations using business language.
+
+I am NOT a chatbot - I am a decision-making automation expert.
+
+📊 SUPPORTED OPERATIONS:
+  1. Calculations: Sum, Average, Min, Max, %, Count, Median
+  2. Transformations: Add/Remove/Rename columns, Sort, Filter, Deduplicate
+  3. Validations: Dropdowns, Error detection, Quality checks
+  4. Formatting: Conditional colors, Highlights, Data bars
+  5. Aggregation: Pivot tables, Group by, Summaries
+  6. Lookups: XLOOKUP, VLOOKUP, Data matching
+  7. Visualization: Charts (Bar, Pie, Line), KPI dashboards
+  8. Reporting: Summary sheets, Change logs
+
+======================================================================
+STEP 1: Excel File Selection
+======================================================================
+
+📁 Please provide the path to your Excel file: "C:\Users\Sadbhavna Singh\Downloads\MYP T1 Result Analysis (2025–26).xlsx"
+
+📊 Analyzing Excel file: MYP T1 Result Analysis (2025–26).xlsx
+
+✅ Successfully loaded: MYP T1 Result Analysis (2025–26).xlsx
+
+📑 Multiple sheets detected (22 sheets):
+   → 1. MYP 1
+     2. MYP 2
+     3. MYP 3
+     4. MYP 4
+     5. MYP 5
+     6. Retake Marks SA 1 MYP4 &5
+     7. DISCARDED_Retake Marks SA 1 MYP
+     8. MYP 1,2,3_RETAKE MARKS ENTRY
+     9. Retake Attandance
+     10. SA1 Retake Schedule
+     11. MYP 5 Descending
+     12. IH
+     13. Science
+     14. Chemistry
+     15. Design
+     16. L&L
+     17. Mathematics
+     18. VA
+     19. Integrated science
+     20. LA
+     21. PHE
+     22. Marathi
+
+📄 Enter sheet number or name to work with (default: 1): MYP 1
+
+   📄 Working with sheet: MYP 1
+   📊 Rows: 41
+   📋 Columns (23): TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+
+   ⚠️  Detected 22 unnamed columns. This usually indicates the Excel file has merged cells, multi-row headers, or missing column names. Consider cleaning the file headers.
+
+   Sample Data (first 3 rows):
+   TERM 1 (2025-26) RESULT ANALYSIS: MYP 1 Unnamed: 1 Unnamed: 2             Unnamed: 3 Unnamed: 4  Unnamed: 5 Unnamed: 6 Unnamed: 7 Unnamed: 8 Unnamed: 9 Unnamed: 10 Unnamed: 11     Unnamed: 12         Unnamed: 13 Unnamed: 14 Unnamed: 15 Unnamed: 16 Unnamed: 17 Unnamed: 18 Unnamed: 19 Unnamed: 20 Unnamed: 21 Unnamed: 22
+                                    S. No.      Grade   Division           Student Name        L&L Mathematics    Science         IH    Design          VA         PHE          LA            None              LEVELS         L&L        Math     Science          IH     Design           VA         PHE          LA        None
+                 MYP 1 CHANDRA (Ms. Deepa)       None       None                   None       None        None       None       None       None       None        None        None MYP 1 \nCHANDRA                 0-3           2           1           2           1           0           4           0           6        None
+                                         1      MYP 1    Chandra Aakash Rakesh Masurkar          3           3          4          4          4          2           5           3            None 2025-04-05T00:00:00          11           9          12          11           9          12           8           8        None
+
+======================================================================
+STEP 2: Modification Queries
+======================================================================
+
+You can now ask me to perform operations using business language.
+
+💼 EXAMPLE BUSINESS QUERIES:
+  📊 Calculations:
+    • 'Calculate total sales by summing Q1, Q2, and Q3'
+    • 'Find the average revenue across all products'
+    • 'Calculate profit margin percentage'
+
+  📈 Visualizations:
+    • 'Create a bar chart for sales by product'
+    • 'Show me a pie chart of revenue distribution'
+
+  🔧 Transformations:
+    • 'Sort data by Sales descending'
+    • 'Remove duplicate entries'
+    • 'Replace NaN values with N/A'
+
+  🎨 Formatting:
+    • 'Highlight cells where profit is negative'
+
+📌 COMMANDS:
+  • Type 'quit', 'exit', or 'q' to stop.
+  • Type 'new' to load a different Excel file.
+  • Type 'sheets' to list available sheets.
+  • Type 'switch sheet <name>' to switch to a different sheet.
+======================================================================
+
+──────────────────────────────────────────────────────────────────────
+📄 Current: MYP T1 Result Analysis (2025–26).xlsx → Sheet: MYP 1
+
+💬 What would you like to modify in the Excel? I would like to get pie chart based on subjects for MYP1 Chandra and MYP 1 Ravi
+
+🔄 Processing your request...
+
+============================================================
+🤖 EXCEL AGENT - PROCESSING REQUEST
+============================================================
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: AI Code Generation...
+   Query: 'I would like to get pie chart based on subjects for MYP1 Chandra and MYP 1 Ravi'
+
+   💻 Generated Pandas Code:
+      # Filter rows for MYP1 Chandra and MYP 1 Ravi
+      import matplotlib.pyplot as plt
+      # Get the required rows
+      chandra_rows = df[df['TERM 1 (2025-26) RESULT ANALYSIS: MYP 1'] == 'MYP 1 CHANDRA (Ms. Deepa)']
+      ravi_rows = df[df['TERM 1 (2025-26) RESULT ANALYSIS: MYP 1'] == 'MYP 1 RAVI']
+      # Get the subject columns
+      subject_columns = ['Unnamed: 4', 'Unnamed: 5', 'Unnamed: 6', 'Unnamed: 7', 'Unnamed: 8', 'Unnamed: 9', 'Unnamed: 10', 'Unnamed: 11']
+      # Plot pie chart for Chandra
+      chandra_values = chandra_rows[subject_columns].iloc[0]
+      plt.pie(chandra_values, labels = chandra_values.index, autopct='%1.1f%%')
+      plt.title('MYP1 Chandra')
+      plt.show()
+      # Plot pie chart for Ravi
+      ravi_values = ravi_rows[subject_columns].iloc[0]
+      plt.pie(ravi_values, labels = ravi_values.index, autopct='%1.1f%%')
+      plt.title('MYP 1 Ravi')
+      plt.show()
+
+   📋 Operation: Generate pie charts for MYP1 Chandra and MYP 1 Ravi based on subject columns
+   ⚠️  Risk Level: MEDIUM
+   📊 Columns Affected: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11
+
+⚙️  STEP 3: Executing Generated Code...
+   ❌ Code execution failed: Security: 'import ' is not allowed in generated code
+   🔄 Falling back to pattern matching approach...
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: Analyzing User Intent...
+   Query: 'I would like to get pie chart based on subjects for MYP1 Chandra and MYP 1 Ravi'
+
+   💭 AI Reasoning:
+      Intent: User wants to create a pie chart based on subjects for specific student groups
+      Rationale: Pie chart with subjects as categories and their respective values for MYP1 Chandra and MYP 1 Ravi
+      Risk Factors: Read-only operation - no risk
+   ✓ Operation Type: visualization
+   ✓ Sub-Operation: pie_chart
+   ✓ Source Columns: Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11
+   ✓ Execution Confidence: MEDIUM
+
+   🤔 Alternative Interpretations Detected:
+      1. Bar chart of subjects
+      2. Line chart of subject performance over time
+
+❓ I need clarification:
+   Which specific subjects and student groups to include in the pie chart
+
+💡 Please rephrase your query with more details.
+
+──────────────────────────────────────────────────────────────────────
+📄 Current: MYP T1 Result Analysis (2025–26).xlsx → Sheet: MYP 1
+
+💬 What would you like to modify in the Excel? print MYP 1 sheet data
+
+🔄 Processing your request...
+
+============================================================
+🤖 EXCEL AGENT - PROCESSING REQUEST
+============================================================
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: AI Code Generation...
+   Query: 'print MYP 1 sheet data'
+
+   💻 Generated Pandas Code:
+      df = df
+
+   📋 Operation: No operation performed, just reassigning the existing DataFrame
+   ⚠️  Risk Level: LOW
+   📊 Columns Affected: All
+
+⚙️  STEP 3: Executing Generated Code...
+   ✅ Code executed successfully!
+   📊 Rows: 41 → 41
+
+📊 STEP 4: Displaying Results (Read-Only)...
+
+======================================================================
+📊 DATA DISPLAY (Read-Only)
+======================================================================
+📝 No operation performed, just reassigning the existing DataFrame
+📊 Total rows: 41
+
+📋 Data Preview (first 10 rows):
+TERM 1 (2025-26) RESULT ANALYSIS: MYP 1 Unnamed: 1 Unnamed: 2              Unnamed: 3 Unnamed: 4  Unnamed: 5 Unnamed: 6 Unnamed: 7 Unnamed: 8 Unnamed: 9 Unnamed: 10 Unnamed: 11     Unnamed: 12         Unnamed: 13 Unnamed: 14 Unnamed: 15 Unnamed: 16 Unnamed: 17 Unnamed: 18 Unnamed: 19 Unnamed: 20 Unnamed: 21  Unnamed: 22
+                                 S. No.      Grade   Division            Student Name        L&L Mathematics    Science         IH    Design          VA         PHE          LA            None              LEVELS         L&L        Math     Science          IH     Design           VA         PHE          LA          NaN
+              MYP 1 CHANDRA (Ms. Deepa)       None       None                    None       None        None       None       None       None       None        None        None MYP 1 \nCHANDRA                 0-3           2           1           2           1           0           4           0           6          NaN
+                                      1      MYP 1    Chandra  Aakash Rakesh Masurkar          3           3          4          4          4          2           5           3            None 2025-04-05T00:00:00          11           9          12          11           9          12           8           8          NaN
+                                      2      MYP 1    Chandra                Ashutosh          4           7          5          4          5          5           5           5            None 2025-06-07T00:00:00           5           8           4           6           9           2           9           4          NaN
+                                      3      MYP 1    Chandra Avika Vileen Mangeshkar          5           4          3          5          7          5           5           3            None             AVERAGE    4.833333    5.388889    4.722222    4.833333    5.777778    4.333333    5.764706    4.555556         5.00
+                                      4      MYP 1    Chandra   Harshdip Hemant Pawar          3           5          4          4          5          5           5           5    MYP 1 \nRAVI                 0-3           4           3           7           8           3           4           4           6          NaN
+                                      5      MYP 1    Chandra        Hrishikesh Gadre          5           4          3          3          5          4           5           3            None 2025-04-05T00:00:00          11           7           9           5           9           9          11           4          NaN
+                                      6      MYP 1    Chandra        Hrudrajeet Singh          5           4          4          4          5          3           5           3            None 2025-06-07T00:00:00           2           7           1           4           3           2           2           5          NaN
+                                      7      MYP 1    Chandra   Janvi Haribhau Kendre          4           5          4          6          7          5           7           4            None             AVERAGE    4.529412    4.823529    3.882353    3.941176    4.470588    4.352941        None        4.35         4.33
+                                      8      MYP 1    Chandra           Kabir Agarwal          5           7          4          5          6          3           -           5            None                None        None        None        None        None        None        None        None        None          NaN
+
+──────────────────────────────────────────────────────────────────────
+📄 Current: MYP T1 Result Analysis (2025–26).xlsx → Sheet: MYP 1
+
+💬 What would you like to modify in the Excel? kinldy create pie chart subject specific
+
+🔄 Processing your request...
+
+============================================================
+🤖 EXCEL AGENT - PROCESSING REQUEST
+============================================================
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: AI Code Generation...
+   Query: 'kinldy create pie chart subject specific'
+
+   💻 Generated Pandas Code:
+      import matplotlib.pyplot as plt
+      for col in ['Unnamed: 4', 'Unnamed: 5', 'Unnamed: 6', 'Unnamed: 7', 'Unnamed: 8', 'Unnamed: 9', 'Unnamed: 10', 'Unnamed: 11']:
+          df[col] = df[col].dropna()
+          plt.pie(df[col].value_counts(), labels = df[col].unique(), autopct='%1.1f%%')
+          plt.title(col)
+          plt.show()
+
+   📋 Operation: Create pie chart for each subject
+   ⚠️  Risk Level: LOW
+   📊 Columns Affected: Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11
+
+⚙️  STEP 3: Executing Generated Code...
+   ❌ Code execution failed: Security: 'import ' is not allowed in generated code
+   🔄 Falling back to pattern matching approach...
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: Analyzing User Intent...
+   Query: 'kinldy create pie chart subject specific'
+
+❌ Error: Failed to parse AI response into JSON
+💡 Please try rephrasing your query or check the column names.
+
+──────────────────────────────────────────────────────────────────────
+📄 Current: MYP T1 Result Analysis (2025–26).xlsx → Sheet: MYP 1
+
+💬 What would you like to modify in the Excel? create pie chart based on levels for maths and science
+
+🔄 Processing your request...
+
+============================================================
+🤖 EXCEL AGENT - PROCESSING REQUEST
+============================================================
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: AI Code Generation...
+   Query: 'create pie chart based on levels for maths and science'
+
+   💻 Generated Pandas Code:
+      # Create pie chart based on levels for maths and science
+      df['Math Levels'] = pd.cut(df['Unnamed: 15'], bins=[0, 3, 6, 9], labels=['0-3', '4-6', '7-9'])
+      df['Science Levels'] = pd.cut(df['Unnamed: 16'], bins=[0, 3, 6, 9], labels=['0-3', '4-6', '7-9'])
+      df_math = df['Math Levels'].value_counts()
+      df_science = df['Science Levels'].value_counts()
+      df = pd.DataFrame({'Math': df_math, 'Science': df_science})
+
+   📋 Operation: Create pie chart based on levels for maths and science
+   ⚠️  Risk Level: MEDIUM
+   📊 Columns Affected: Unnamed: 15, Unnamed: 16, Math Levels, Science Levels
+
+⚙️  STEP 3: Executing Generated Code...
+   ❌ Code execution failed: Code execution error: '<' not supported between instances of 'int' and 'str'
+   🔄 Falling back to pattern matching approach...
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: Analyzing User Intent...
+   Query: 'create pie chart based on levels for maths and science'
+
+   💭 AI Reasoning:
+      Intent: User wants to create a pie chart based on levels for maths and science
+      Rationale: Pie chart with levels as categories and maths/science as values
+      Risk Factors: Read-only operation - no risk
+   ✓ Operation Type: visualization
+   ✓ Sub-Operation: pie_chart
+   ✓ Source Columns: Unnamed: 13, Unnamed: 15, Unnamed: 16
+   ✓ Execution Confidence: HIGH
+
+📋 STEP 3: Creating Enterprise Decision Plan...
+   ✓ Operation: visualization → pie_chart
+   ✓ Target Column(s): N/A (visualization/reporting)
+   ✓ Change Description: Create pie_chart chart using Unnamed: 13, Unnamed: 15, Unnamed: 16
+   ✓ Risk Level: LOW
+
+   📄 Decision Plan (JSON):
+{
+    "operation_type": "visualization",
+    "sub_operation": "pie_chart",
+    "source_columns": [
+        "Unnamed: 13",
+        "Unnamed: 15",
+        "Unnamed: 16"
+    ],
+    "target_columns": null,
+    "sheet_name": "MYP 1",
+    "execution_scope": "all_rows",
+    "risk_level": "low",
+    "assumptions": [
+        "Original data will remain unchanged (new file created)",
+        "Operation will apply to all_rows (41 rows)",
+        "Chart will be embedded in the Excel file below the data"
+    ],
+    "requires_confirmation": false,
+    "change_description": "Create pie_chart chart using Unnamed: 13, Unnamed: 15, Unnamed: 16",
+    "formula_logic": "pie chart of Unnamed: 15 and Unnamed: 16 by Unnamed: 13",
+    "is_read_only": false
+}
+
+🔍 STEP 4: Validating Decision Plan...
+   ✓ Validation Status: APPROVED
+
+⚙️  STEP 5: Executing Enterprise Excel Operation...
+   ❌ FAILED: Chart creation failed: 'PieChart' object has no attribute 'x_axis'
+   Operation attempted: N/A
+
+============================================================
+
+❌ Error: Chart creation failed: 'PieChart' object has no attribute 'x_axis'
+💡 Please try rephrasing your query or check the column names.
+
+──────────────────────────────────────────────────────────────────────
+📄 Current: MYP T1 Result Analysis (2025–26).xlsx → Sheet: MYP 1
+
+💬 What would you like to modify in the Excel? chadra as x axis and maths and science as y axis
+
+🔄 Processing your request...
+
+============================================================
+🤖 EXCEL AGENT - PROCESSING REQUEST
+============================================================
+
+📊 STEP 1: Analyzing Excel Structure...
+   ✓ Found 23 columns: TERM 1 (2025-26) RESULT ANALYSIS: MYP 1, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11, Unnamed: 12, Unnamed: 13, Unnamed: 14, Unnamed: 15, Unnamed: 16, Unnamed: 17, Unnamed: 18, Unnamed: 19, Unnamed: 20, Unnamed: 21, Unnamed: 22
+   ✓ Total rows: 41
+   ✓ Sheet: MYP 1
+
+🧠 STEP 2: AI Code Generation...
+   Query: 'chadra as x axis and maths and science as y axis'
+
+   💻 Generated Pandas Code:
+      df = df[['Unnamed: 2', 'Unnamed: 5', 'Unnamed: 6']].rename(columns={'Unnamed: 2': 'Chandra', 'Unnamed: 5': 'Maths', 'Unnamed: 6': 'Science'})
+
+   📋 Operation: Select Chandra, Maths and Science columns and rename them
+   ⚠️  Risk Level: LOW
+   📊 Columns Affected: Unnamed: 2, Unnamed: 5, Unnamed: 6
+
+⚙️  STEP 3: Executing Generated Code...
+   ✅ Code executed successfully!
+   📊 Rows: 41 → 41
+
+💾 STEP 4: Saving Results...
+   ✅ SUCCESS!
+   ✓ Operation: Select Chandra, Maths and Science columns and rename them
+   ✓ Rows: 41 → 41
+   ✓ Output saved to: MYP T1 Result Analysis (2025–26)_modified_1.xlsx
+
+======================================================================
+✅ MODIFICATION SUCCESSFUL!
+======================================================================
+📁 New file created: MYP T1 Result Analysis (2025–26)_modified_1.xlsx
+📝 Select Chandra, Maths and Science columns and rename them
+📊 Rows modified: 41
+
+📋 Preview of modified data (first 10 rows):
+ Chandra       Maths Science
+Division Mathematics Science
+     NaN         NaN     NaN
+ Chandra           3       4
+ Chandra           7       5
+ Chandra           4       3
+ Chandra           5       4
+ Chandra           4       3
+ Chandra           4       4
+ Chandra           5       4
+ Chandra           7       4
+
+──────────────────────────────────────────────────────────────────────
+
+🔄 Use this modified file for next query? (yes/no, default: yes): no
+✅ Still working with: C:\Users\Sadbhavna Singh\Downloads\MYP T1 Result Analysis (2025–26).xlsx
+
+──────────────────────────────────────────────────────────────────────
+📄 Current: MYP T1 Result Analysis (2025–26).xlsx → Sheet: MYP 1
+
+💬 What would you like to modify in the Excel? Traceback (most recent call last):
+  File "D:\AgentExcel\AIAgent\excel_agent.py", line 2694, in <module>
+    run_interactive_agent(API_KEY)
+  File "D:\AgentExcel\AIAgent\excel_agent.py", line 2541, in run_interactive_agent
+    query = input("\n💬 What would you like to modify in the Excel? ").strip()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+^C
+D:\AgentExcel\AIAgent>
+
+
+
+
+
+
+
+
+
+
+
+
