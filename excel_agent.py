@@ -289,8 +289,13 @@ class ExcelAgent:
             
             # Count string values that look like headers (not numbers)
             string_count = 0
-            for val in row:
-                if pd.notna(val):
+            for val in row.values:  # Use .values to get numpy array for safe iteration
+                try:
+                    is_valid = val is not None and pd.notna(val)
+                except (ValueError, TypeError):
+                    is_valid = val is not None
+                
+                if is_valid:
                     val_str = str(val).strip()
                     # Check if it looks like a header (text, not pure number)
                     try:
@@ -319,9 +324,19 @@ class ExcelAgent:
         - Remove line breaks
         - Trim whitespace
         - Handle None/NaN
+        - Handle Series (take first value)
         """
-        if pd.isna(header) or header is None:
-            return ""
+        # Handle Series - take first value if passed
+        if isinstance(header, pd.Series):
+            header = header.iloc[0] if len(header) > 0 else None
+        
+        # Handle None/NaN - use try/except to avoid Series ambiguity
+        try:
+            if header is None or pd.isna(header):
+                return ""
+        except (ValueError, TypeError):
+            # pd.isna can fail on some types, treat as valid
+            pass
         
         header_str = str(header)
         # Remove line breaks and extra whitespace
@@ -348,9 +363,16 @@ class ExcelAgent:
                 if normalized == "" or normalized.startswith("Unnamed"):
                     # Try to get from first data row if header is empty
                     if len(df) > 0:
-                        first_val = df.iloc[0, i]
-                        if pd.notna(first_val) and not str(first_val).replace('.','').replace('-','').isdigit():
-                            normalized = self._normalize_header(first_val)
+                        try:
+                            # Use .iat for guaranteed scalar access
+                            first_val = df.iat[0, i]
+                            # Ensure first_val is a scalar, not a Series
+                            if isinstance(first_val, pd.Series):
+                                first_val = first_val.iloc[0] if len(first_val) > 0 else None
+                            if pd.notna(first_val) and not str(first_val).replace('.','').replace('-','').isdigit():
+                                normalized = self._normalize_header(first_val)
+                        except (IndexError, ValueError):
+                            pass  # Keep the default Column_N name
                 if normalized == "":
                     normalized = f"Column_{i+1}"
                 new_columns.append(normalized)
@@ -359,9 +381,16 @@ class ExcelAgent:
         
         # Use the detected header row as new column names
         new_columns = []
-        header_values = df.iloc[header_row]
         
-        for i, val in enumerate(header_values):
+        for i in range(len(df.columns)):
+            try:
+                # Use .iat for guaranteed scalar access
+                val = df.iat[header_row, i]
+                # Ensure val is a scalar, not a Series
+                if isinstance(val, pd.Series):
+                    val = val.iloc[0] if len(val) > 0 else None
+            except (IndexError, ValueError):
+                val = None
             normalized = self._normalize_header(val)
             if normalized == "":
                 normalized = f"Column_{i+1}"
